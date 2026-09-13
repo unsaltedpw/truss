@@ -268,6 +268,17 @@ func (c *Client) InstallationToken(ctx context.Context) (string, time.Time, erro
 	return c.mintInstallationToken(ctx)
 }
 
+// AppID returns the App id this Client was configured with -- the same
+// value it already sends as the JWT `iss` claim (signAppJWT). It performs no
+// I/O: the id was read once, at construction, from the same github-app
+// credential every other call here authenticates with. gates.CheckDeliveryRef
+// needs it to recognise the applier's own App as a ruleset's bypass actor,
+// and gates does no I/O of its own, so the value has to be handed in rather
+// than fetched.
+func (c *Client) AppID() int64 {
+	return c.appID
+}
+
 // cachedToken is what every other authenticated call in this package uses:
 // mint lazily, reuse until close to expiry, so a pass that reads protection,
 // several pull requests and their reviews does not mint a token per call.

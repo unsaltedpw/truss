@@ -57,6 +57,30 @@ func TestCheckRulesetsRefusesANonEmptyBypassActors(t *testing.T) {
 	}
 }
 
+// TestCheckRulesetsRefusesAnAppBypassActorToo: main's gate is unchanged by
+// CheckDeliveryRef existing. An Integration bypass actor that would be the
+// EXACT accepted shape on the delivery ref -- the applier's own App, alone,
+// bypass_mode "always" -- is still refused here, because CheckRulesets never
+// looks at ActorID or which type it is: approval is supposed to be main's
+// only door, so ANY named bypass actor is refused regardless of who it is.
+func TestCheckRulesetsRefusesAnAppBypassActorToo(t *testing.T) {
+	rs := Rulesets{Applicable: []Ruleset{{
+		ID:          7,
+		Name:        "require a pull request",
+		Enforcement: "active",
+		BypassActors: []BypassActor{
+			{ActorType: "Integration", ActorID: 4922051, BypassMode: "always"},
+		},
+	}}}
+	problems := CheckRulesets(rs)
+	if !hasProblemContaining(problems, `ruleset "require a pull request" (id 7)`) {
+		t.Fatalf("problems %v do not name the ruleset", problems)
+	}
+	if !hasProblemContaining(problems, "Integration") {
+		t.Fatalf("problems %v do not name the bypass actor's type", problems)
+	}
+}
+
 // TestCheckRulesetsNamesEveryDistinctActorType: an operator who goes to look
 // needs to know every kind of actor that can skip the rule, not just the
 // first one found.

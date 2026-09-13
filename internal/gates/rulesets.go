@@ -66,8 +66,27 @@ type Ruleset struct {
 // "always" (skips everything), "pull_request" (skips only on a PR merge)
 // or "exempt" (skipped silently, no audit entry) -- GitHub's documented
 // values, verified against the REST reference rather than assumed.
+//
+// ActorID is read from the same object: "The ID of the actor that can
+// bypass a ruleset. Required for Integration, RepositoryRole, Team, and
+// User actor types. If actor_type is OrganizationAdmin, actor_id is
+// ignored. If actor_type is DeployKey, this should be null." -- the
+// repository-ruleset-bypass-actor schema, GitHub's REST API description,
+// verified 2026-09-13.
+//
+// ⚠️ FOR ActorType "Integration" THIS IS THE APP'S OWN ID, NOT AN
+// INSTALLATION ID. The same API description, one schema over, documents a
+// SEPARATE actor-type vocabulary for a pull_request rule's
+// dismissal_restriction.allowed_actors[].type: "User", "Team",
+// "IntegrationInstallation" or "RepositoryRole" -- where GitHub means an
+// installation, it says so with a distinct string. bypass_actors says
+// plain "Integration", so ActorID here is the App's id: the same value
+// truss's own `github-app`/`app_id` credential holds and already sends as
+// the JWT `iss` claim (internal/forge/client.go). Nothing in actor_id's own
+// prose disambiguates this; the two sibling enums living in one schema do.
 type BypassActor struct {
 	ActorType  string
+	ActorID    int64
 	BypassMode string
 }
 
@@ -114,12 +133,7 @@ type Rulesets struct {
 func CheckRulesets(rs Rulesets) []string {
 	var problems []string
 	for _, r := range rs.Applicable {
-		if r.Enforcement != "active" {
-			problems = append(problems, fmt.Sprintf(
-				"ruleset %q (id %d) applies to this branch but no longer reads as active (now %q): "+
-					"the two reads of it disagree, which this gate treats as a race or an attempt to dodge it",
-				r.Name, r.ID, r.Enforcement))
-		}
+		problems = append(problems, checkEnforcement(r)...)
 		if len(r.BypassActors) == 0 {
 			continue
 		}
@@ -139,4 +153,21 @@ func CheckRulesets(rs Rulesets) []string {
 			r.Name, r.ID, strings.Join(who, ", ")))
 	}
 	return problems
+}
+
+// checkEnforcement refuses a ruleset whose second read (rulesets/{id}) no
+// longer agrees that it is active, for the reason given on Ruleset's own
+// Enforcement field: reaching this gate at all is proof the first read saw
+// "active" moments earlier, so a second read disagreeing is a race or an
+// attempt to dodge the bypass_actors read, never "additive and inert".
+// Shared by CheckRulesets and CheckDeliveryRef, which otherwise disagree
+// completely about what bypass_actors is allowed to contain.
+func checkEnforcement(r Ruleset) []string {
+	if r.Enforcement == "active" {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"ruleset %q (id %d) applies to this branch but no longer reads as active (now %q): "+
+			"the two reads of it disagree, which this gate treats as a race or an attempt to dodge it",
+		r.Name, r.ID, r.Enforcement)}
 }

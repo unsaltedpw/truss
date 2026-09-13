@@ -48,6 +48,11 @@ type tofuFactory func(env []string) tofuRunner
 type forgeGateway interface {
 	Protection(ctx context.Context, branch string) (gates.Protection, error)
 	Rulesets(ctx context.Context, branch string) (gates.Rulesets, error)
+	// AppID performs no I/O: it returns the id this client was already
+	// configured with. gates.CheckDeliveryRef needs it to recognise the
+	// applier's own App as a ruleset's bypass actor, and internal/gates does
+	// no I/O of its own.
+	AppID() int64
 	InstallationToken(ctx context.Context) (string, time.Time, error)
 	PullNumbersForCommit(ctx context.Context, sha string) ([]int, error)
 	PullRequest(ctx context.Context, number int) (gates.PullRequest, error)

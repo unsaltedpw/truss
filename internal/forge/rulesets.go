@@ -42,6 +42,7 @@ type wireRuleset struct {
 	Enforcement  *string `json:"enforcement"`
 	BypassActors []struct {
 		ActorType  *string `json:"actor_type"`
+		ActorID    *int64  `json:"actor_id"`
 		BypassMode *string `json:"bypass_mode"`
 	} `json:"bypass_actors"`
 }
@@ -118,7 +119,21 @@ func (c *Client) Rulesets(ctx context.Context, branch string) (gates.Rulesets, e
 			if a.BypassMode != nil {
 				mode = *a.BypassMode
 			}
-			gr.BypassActors = append(gr.BypassActors, gates.BypassActor{ActorType: *a.ActorType, BypassMode: mode})
+			// actor_id's own documentation: "Required for Integration,
+			// RepositoryRole, Team, and User actor types. If actor_type is
+			// OrganizationAdmin, actor_id is ignored. If actor_type is
+			// DeployKey, this should be null." So absent is only ever
+			// legitimate for OrganizationAdmin and DeployKey; for Integration
+			// specifically -- the one type gates.CheckDeliveryRef compares
+			// against an App id -- an absent actor_id is a malformed
+			// response, not a zero-valued match against no App.
+			var actorID int64
+			if a.ActorID != nil {
+				actorID = *a.ActorID
+			} else if *a.ActorType == "Integration" {
+				return gates.Rulesets{}, fmt.Errorf("forge: ruleset %d: an Integration bypass actor has no actor_id", id)
+			}
+			gr.BypassActors = append(gr.BypassActors, gates.BypassActor{ActorType: *a.ActorType, ActorID: actorID, BypassMode: mode})
 		}
 		applicable = append(applicable, gr)
 	}

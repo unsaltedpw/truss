@@ -101,6 +101,11 @@ type fakeForge struct {
 	RulesetsByBranch map[string]gates.Rulesets
 	RulesetsErr      error
 
+	// AppIDResult stands in for forge.Client.AppID() -- no I/O, just the
+	// configured id -- so a test can name it as a ruleset's Integration
+	// bypass actor without a real credential.
+	AppIDResult int64
+
 	Token    string
 	TokenErr error
 
@@ -130,13 +135,24 @@ func (f *fakeForge) Rulesets(ctx context.Context, branch string) (gates.Rulesets
 	return f.RulesetsResult, f.RulesetsErr
 }
 
+// AppIDResult, left at its zero value, is fine for every existing fixture:
+// none of them names an Integration bypass actor, so gates.CheckDeliveryRef
+// never compares against it.
+func (f *fakeForge) AppID() int64 {
+	return f.AppIDResult
+}
+
 // protectedDeliveryRulesets is a ruleset shaped the way CheckDeliveryRef
-// demands: active, nobody may bypass it, and it blocks both force pushes and
-// deletion so the ref's history stays append-only.
+// demands: active, nobody may bypass it, and it restricts updates and blocks
+// both force pushes and deletion so the ref's history stays append-only. No
+// bypass_actors is as compliant here as an exact App bypass would be --
+// CheckDeliveryRef only refuses a bypass_actors list that is present but
+// wrong -- and these apply-pass tests are about the pass's orchestration,
+// not the App-bypass shape, which internal/gates' own tests cover.
 func protectedDeliveryRulesets() gates.Rulesets {
 	return gates.Rulesets{Applicable: []gates.Ruleset{{
 		ID: 42, Name: "delivery ref", Enforcement: "active",
-		Rules: []string{"non_fast_forward", "deletion"},
+		Rules: []string{"update", "non_fast_forward", "deletion"},
 	}}}
 }
 

@@ -313,13 +313,27 @@ cluster holds its last known-good state, and the alert says why.
 
 The applier refuses to publish onto a ref whose history nothing protects — an
 unprotected ref is not a weaker gate, it is a path to production nobody is
-watching. It re-reads the rulesets covering that ref and requires them to block
-force pushes and deletion, for the reason `main` needs the same: history is the
-audit log, and a cluster was told to apply what is in it. The check runs before
-the push, because discovering afterwards would be discovering it too late.
+watching. It re-reads the rulesets covering that ref and requires them to
+restrict updates, block force pushes and block deletion, for the reason `main`
+needs the same: history is the audit log, and a cluster was told to apply what
+is in it. The check runs before the push, because discovering afterwards would
+be discovering it too late.
 
-⚠️ It does not prove that only the applier can move the ref. See
-`docs/work-items.md` for what that would take and why it was accepted here.
+**Only the applier's own App may move the ref, and this is now checked, not
+assumed.** `gates.CheckDeliveryRef` refuses a ruleset applying to `queued`
+unless its `bypass_actors` is either empty or exactly one entry naming the
+applier's GitHub App (`actor_type` `Integration`, `actor_id` equal to the App
+id the applier's own `github-app` credential holds) with `bypass_mode`
+`always` — the one combination that turns an `update` rule ("only bypass
+permission may update matching refs") into "only the applier may update this
+ref" rather than "nobody may" or "anyone named here may". A second actor, a
+different App's id, any non-Integration actor (`User`, `Team`,
+`RepositoryRole`, `OrganizationAdmin`, `DeployKey`), or a `bypass_mode` other
+than `always` is refused by name. This is deliberately the opposite of what
+`main`'s gate does with a bypass actor (any non-empty `bypass_actors` there is
+the hole) — on `main` a bypass actor is a second door around approval; on
+`queued`, approval already happened, and the single App bypass is what makes
+the door have exactly one key.
 
 The push is a plain fast-forward with no lease and no force, so the ordering
 property is git's rather than ours: a ref somebody else has moved makes this

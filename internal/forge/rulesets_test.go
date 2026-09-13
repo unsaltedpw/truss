@@ -63,6 +63,9 @@ func TestRulesetsJoinsTheTwoReads(t *testing.T) {
 	if len(got.BypassActors) != 1 || got.BypassActors[0].ActorType != "DeployKey" || got.BypassActors[0].BypassMode != "always" {
 		t.Fatalf("BypassActors = %+v, want one DeployKey actor with bypass_mode always", got.BypassActors)
 	}
+	if got.BypassActors[0].ActorID != 99 {
+		t.Fatalf("ActorID = %d, want 99 (the actor_id the wire response carried)", got.BypassActors[0].ActorID)
+	}
 }
 
 // TestRulesetsWithNoneApplyingIsEmptyNotAnError: an empty effective-rules
@@ -218,6 +221,75 @@ func TestRulesetsDefaultsAnAbsentBypassModeToAlways(t *testing.T) {
 	}
 	if got := rs.Applicable[0].BypassActors[0].BypassMode; got != "always" {
 		t.Fatalf("BypassMode = %q, want the documented default %q for an absent key", got, "always")
+	}
+}
+
+// TestRulesetsDecodesAnIntegrationBypassActorsID: gates.CheckDeliveryRef
+// compares an Integration bypass actor's id against the applier's own App
+// id, so the wire decode has to carry actor_id through, not just actor_type
+// and bypass_mode.
+func TestRulesetsDecodesAnIntegrationBypassActorsID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/7654321/access_tokens":
+			mintHandler("ghs_x")(w, r)
+		case "/repos/acme/widgets/rules/branches/queued":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"type": "update", "ruleset_id": 1}]`))
+		case "/repos/acme/widgets/rulesets/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id": 1, "name": "queued", "enforcement": "active", "bypass_actors": [
+				{"actor_id": 4922051, "actor_type": "Integration", "bypass_mode": "always"}
+			]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	rs, err := c.Rulesets(context.Background(), "queued")
+	if err != nil {
+		t.Fatalf("Rulesets: %v", err)
+	}
+	if len(rs.Applicable) != 1 || len(rs.Applicable[0].BypassActors) != 1 {
+		t.Fatalf("Applicable = %+v, want one ruleset with one bypass actor", rs.Applicable)
+	}
+	a := rs.Applicable[0].BypassActors[0]
+	if a.ActorType != "Integration" || a.ActorID != 4922051 || a.BypassMode != "always" {
+		t.Fatalf("BypassActors[0] = %+v, want Integration id 4922051 mode always", a)
+	}
+}
+
+// TestRulesetsRefusesAnIntegrationBypassActorWithNoActorID: the schema marks
+// actor_id "Required for Integration" -- absent is legitimate only for
+// OrganizationAdmin (ignored) and DeployKey (documented null), so an
+// Integration entry missing it is a malformed response, never a silent
+// zero-valued id that would never compare equal to a real App id anyway but
+// would do so for the wrong reason (a decode gap, not a mismatch).
+func TestRulesetsRefusesAnIntegrationBypassActorWithNoActorID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/7654321/access_tokens":
+			mintHandler("ghs_x")(w, r)
+		case "/repos/acme/widgets/rules/branches/queued":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"type": "update", "ruleset_id": 1}]`))
+		case "/repos/acme/widgets/rulesets/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id": 1, "name": "queued", "enforcement": "active", "bypass_actors": [
+				{"actor_type": "Integration", "bypass_mode": "always"}
+			]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	rs, err := c.Rulesets(context.Background(), "queued")
+	if err == nil {
+		t.Fatalf("an Integration bypass actor with no actor_id was accepted; got %+v", rs)
 	}
 }
 

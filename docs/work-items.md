@@ -791,32 +791,33 @@ have `scripts/check` say out loud how many files it scanned, so "clean" over
 zero new files is visibly not the same as "clean" over forty. The second is
 smaller and does not change what is refused.
 
-## The delivery ref is built, and what it does not prove
+## ~~The delivery ref is built, and what it does not prove~~ (closed 2026-09-13)
 
 Decided by the owner 2026-09-10: the applier publishes to `refs/heads/queued`
-after gating a commit and matching every render, and refuses unless an active
-ruleset blocks `non_fast_forward` and `deletion` on that ref. A reconciler
-tracks that ref and never `main`, so it can only ever see commits the applier
-has already gated.
+after gating a commit and matching every render, and refuses unless every
+ruleset applying to that ref restricts updates (`update`), blocks
+`non_fast_forward` and blocks `deletion`. A reconciler tracks that ref and
+never `main`, so it can only ever see commits the applier has already gated.
 
-⚠️ **IT DOES NOT PROVE THAT ONLY THE APPLIER CAN MOVE THE REF, AND THAT IS A
-DECISION RATHER THAN AN OVERSIGHT.** Blocking force pushes and deletion leaves
-an ordinary fast-forward open to anyone with write access — deliberately,
-because the applier needs exactly that and needs no bypass actor to do it.
-Restricting the pusher would need an `update` rule whose sole bypass actor is
-the applier's App, and the effect of that combination could not be measured
-here: it needs a ruleset that exists to read back, and creating one was refused
-as a write to repository configuration.
+**Only the applier's own App may move the ref, and this is now checked rather
+than assumed.** `gates.CheckDeliveryRef` (`internal/gates/deliveryref.go`)
+refuses a ruleset's `bypass_actors` on the delivery ref unless it is either
+empty or exactly one entry naming the applier's GitHub App (`actor_type`
+`Integration`, `actor_id` equal to the App id the `github-app`/`app_id`
+credential holds) with `bypass_mode` `always` — verified against the
+repository-ruleset-bypass-actor schema, GitHub's REST API description
+(2026-09-13). A second actor, a different App's id, any
+non-Integration actor (`User`, `Team`, `RepositoryRole`, `OrganizationAdmin`,
+`DeployKey`), or a `bypass_mode` other than `always` is refused by name,
+each shape table-tested in `internal/gates/deliveryref_test.go`. `main`'s own
+gate (`CheckRulesets`) is unchanged and deliberately disagrees: there, ANY
+bypass actor — including this exact App — is still the hole the 2026-09-09
+push proved, because approval is supposed to be `main`'s only door.
 
-The trade was accepted because `docs/threat-model.md` already places the
-approver's own accounts out of scope, so on a repository whose only writers are
-the approver and the applier, push-exclusivity defends against a party the
-model has already excluded.
-
-⚠️ **THAT CEASES TO BE TRUE THE MOMENT A SECOND HUMAN OR A CI JOB GETS WRITE
-ACCESS TO THE APPLIED REPOSITORY, AND NOTHING NOTICES WHEN IT DOES.** Closing
-it needs the measurement above. Until then this is the one place where a
-property is held by who has access rather than by a gate.
+The trade `docs/threat-model.md` accepted — push-exclusivity held by who has
+write access to the repository, not by a gate — no longer has to be trusted on
+faith: an `update` rule with no bypass actor at all, or the wrong one, is
+refused before the applier ever publishes.
 
 Two smaller things the same work left behind. A deployment with no delivery
 units is never asked to protect a ref it does not use — the tree decides, so a
@@ -826,6 +827,19 @@ rather than `delivered`, because advancing it means truss handed the manifests
 over, not that a cluster has them; a second ref advanced from observed
 reconciler status would be the honest answer to "what is actually running",
 and is not built.
+
+**What closed it.** `internal/forge/rulesets.go` decodes
+`bypass_actors[].actor_id` (it previously carried only `actor_type` and
+`bypass_mode`, which was enough for `CheckRulesets`'s "refuse any bypass"
+rule but not for comparing an `Integration` actor against a specific App), and
+refuses a response where an `Integration` actor omits it — the schema
+documents `actor_id` as required for that type, so an absent one is a
+malformed response rather than a zero-valued id that would coincidentally
+never match. Closing this in truss is not the same as it being enforced in
+production: platform's own `queued` ruleset still needs the `update` rule and
+the App bypass added (platform#152) before a real repository matches the
+accepted shape, and until then the applier's own gate refuses to publish,
+which is the fail-closed direction this section existed to demand.
 
 ### Superseded: why it was deferred
 
