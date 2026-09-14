@@ -314,12 +314,29 @@ cluster holds its last known-good state, and the alert says why.
 The applier refuses to publish onto a ref whose history nothing protects — an
 unprotected ref is not a weaker gate, it is a path to production nobody is
 watching. It re-reads the rulesets covering that ref and requires them to block
-force pushes and deletion, for the reason `main` needs the same: history is the
-audit log, and a cluster was told to apply what is in it. The check runs before
-the push, because discovering afterwards would be discovering it too late.
+force pushes, block deletion, and restrict updates, for the reason `main` needs
+the same: history is the audit log, and a cluster was told to apply what is in
+it. The check runs before the push, because discovering afterwards would be
+discovering it too late.
 
-⚠️ It does not prove that only the applier can move the ref. See
-`docs/work-items.md` for what that would take and why it was accepted here.
+**Only the applier may move the ref, and that is checked rather than assumed.**
+Of the three rules, restricting updates is the one that decides *who* rather
+than *what shape*, so it carries a bypass policy of its own: the list must name
+this deployment's App and nothing else. Any other actor is refused, including a
+second GitHub App — `actor_type` `Integration` names a class of credential, so
+the numeric `actor_id` is what separates the applier from an unrelated App. An
+`exempt` bypass is refused even when the id matches, because GitHub documents it
+as skipping rules with no audit entry, and an unlogged write onto the ref whose
+whole purpose is to be the audit log is worse than a logged one.
+
+An empty list is refused as well, which is stricter than safety requires: the
+rule that keeps everyone out keeps the applier out too, and accepting it would
+only move the failure to the push, where GitHub's error names no knob to turn.
+So is a bypass list this credential could not read — GitHub omits the key
+entirely for a token that cannot see it, and an omitted key decodes to the same
+empty list as "nobody may bypass". Reading blindness as compliance is the one
+failure mode this project refuses by construction. `docs/work-items.md` carries
+the measurement all of this rests on.
 
 The push is a plain fast-forward with no lease and no force, so the ordering
 property is git's rather than ours: a ref somebody else has moved makes this

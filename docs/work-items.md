@@ -791,32 +791,58 @@ have `scripts/check` say out loud how many files it scanned, so "clean" over
 zero new files is visibly not the same as "clean" over forty. The second is
 smaller and does not change what is refused.
 
-## The delivery ref is built, and what it does not prove
+## The delivery ref is built, and it is exclusive to the applier
 
 Decided by the owner 2026-09-10: the applier publishes to `refs/heads/queued`
 after gating a commit and matching every render, and refuses unless an active
-ruleset blocks `non_fast_forward` and `deletion` on that ref. A reconciler
-tracks that ref and never `main`, so it can only ever see commits the applier
-has already gated.
+ruleset protects that ref. A reconciler tracks that ref and never `main`, so it
+can only ever see commits the applier has already gated.
 
-⚠️ **IT DOES NOT PROVE THAT ONLY THE APPLIER CAN MOVE THE REF, AND THAT IS A
-DECISION RATHER THAN AN OVERSIGHT.** Blocking force pushes and deletion leaves
-an ordinary fast-forward open to anyone with write access — deliberately,
-because the applier needs exactly that and needs no bypass actor to do it.
-Restricting the pusher would need an `update` rule whose sole bypass actor is
-the applier's App, and the effect of that combination could not be measured
-here: it needs a ruleset that exists to read back, and creating one was refused
-as a write to repository configuration.
+Ruled on 2026-09-14 that protecting the ref's shape is not enough, and
+`gates.CheckDeliveryRef` now refuses unless the rulesets applying to it carry
+`non_fast_forward`, `deletion` **and** `update`, with the only actor on their
+bypass list being the App named by `DELIVERY_BYPASS_ACTOR_ID`. A ref with the two
+append-only rules and not the third is refused. The refusal names the App to
+list, because an operator told only to "add the update rule" would then be locked
+out of their own delivery ref — the rule refuses every writer, applier included.
 
-The trade was accepted because `docs/threat-model.md` already places the
-approver's own accounts out of scope, so on a repository whose only writers are
-the approver and the applier, push-exclusivity defends against a party the
-model has already excluded.
+**The blocker was a measurement, not a policy disagreement.** This stood deferred
+for four days because the effect of `update` plus an `Integration` bypass actor
+could not be confirmed without a ruleset that exists to read back, and creating
+one was refused as a write to repository configuration. A throwaway ruleset
+targeting `probe-*` in the deployment's own repository settled it:
 
-⚠️ **THAT CEASES TO BE TRUE THE MOMENT A SECOND HUMAN OR A CI JOB GETS WRITE
-ACCESS TO THE APPLIED REPOSITORY, AND NOTHING NOTICES WHEN IT DOES.** Closing
-it needs the measurement above. Until then this is the one place where a
-property is held by who has access rather than by a gate.
+| credential | ruleset | result |
+|---|---|---|
+| deploy key, `contents:write` | `non_fast_forward` + `update`, no bypass actor | GH013 "Cannot update this protected ref.", push declined |
+| App installation token, `PUT /repos/.../contents/...` | same | 409 "Cannot update this protected ref." |
+| the same App, once listed in `bypass_actors` | same | accepted; commit `e245eab`, authored by that App |
+
+A write scope does not get through the rule; being listed is the only thing that
+does. Three consequences of the same probe, all now gated:
+
+- **`update` does not gate creation.** The deploy key created the probe branch
+  freely and was refused on the second push. The approver still opens the
+  delivery ref by hand from an identity that is not a bypass actor, so requiring
+  the rule costs a deployment one ruleset edit, not a chicken-and-egg it cannot
+  get out of.
+- **A bypass list can read back BLIND rather than empty.** An App token without
+  Administration received no `bypass_actors` key at all from a ruleset that did
+  name an App, while the same credential was told `current_user_can_bypass:
+  always`. Absent is therefore never decoded as "nobody may": `CheckRulesets` and
+  `CheckDeliveryRef` both refuse it. Narrow the applier's credential and every
+  publish refuses, which is the direction this project picks on purpose — a blind
+  read on a path to production is not evidence of safety.
+- **`bypass_mode: exempt` is refused even from the right App**, because GitHub
+  documents it as skipping rules with no audit entry, and an unlogged write onto
+  the ref whose entire purpose is to be the audit log is worse than a logged one.
+
+⚠️ **`ActorType` IS NOT AN IDENTITY.** `Integration` names a *class* of
+credential. Until `bypass_actors[].actor_id` was decoded, a ruleset listing some
+second, unrelated App matched the applier on type and read as exactly the
+compliant configuration above — the gate would have certified push-exclusivity
+shared with an App nobody named. `TestCheckDeliveryRefRefusesASecondApp` is the
+regression; it goes red on its own when the id comparison is removed.
 
 Two smaller things the same work left behind. A deployment with no delivery
 units is never asked to protect a ref it does not use — the tree decides, so a

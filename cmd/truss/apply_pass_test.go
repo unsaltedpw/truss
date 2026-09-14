@@ -157,6 +157,9 @@ func testConfig() config.Config {
 		Workdir:             "",
 		RequiredCheck:       "plan",
 		ExpiryWarnDays:      30,
+		// Matches the App the delivery ruleset fixture names as its only
+		// bypass actor; see testApplierAppID.
+		DeliveryBypassActorID: testApplierAppID,
 	}
 }
 

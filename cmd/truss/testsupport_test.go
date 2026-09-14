@@ -130,13 +130,25 @@ func (f *fakeForge) Rulesets(ctx context.Context, branch string) (gates.Rulesets
 	return f.RulesetsResult, f.RulesetsErr
 }
 
+// testApplierAppID is the GitHub App id these fixtures give the applier, on
+// both sides of the check: config.Config.DeliveryBypassActorID and the
+// delivery ref's bypass list. They have to be the same number, because the
+// gate's question is whether the ref names the App the applier authenticates
+// as, and a fixture that drifted would be answering a different question.
+const testApplierAppID = 555
+
 // protectedDeliveryRulesets is a ruleset shaped the way CheckDeliveryRef
-// demands: active, nobody may bypass it, and it blocks both force pushes and
-// deletion so the ref's history stays append-only.
+// demands: active, its bypass list readable, all three rules present so the
+// ref is append-only AND restricted to the applier's App, and that App the only
+// actor listed.
 func protectedDeliveryRulesets() gates.Rulesets {
 	return gates.Rulesets{Applicable: []gates.Ruleset{{
 		ID: 42, Name: "delivery ref", Enforcement: "active",
-		Rules: []string{"non_fast_forward", "deletion"},
+		Rules:            []string{"non_fast_forward", "deletion", "update"},
+		BypassActorsRead: true,
+		BypassActors: []gates.BypassActor{
+			{ActorID: testApplierAppID, ActorType: "Integration", BypassMode: "always"},
+		},
 	}}}
 }
 

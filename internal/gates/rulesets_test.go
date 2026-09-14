@@ -3,9 +3,11 @@ package gates
 import "testing"
 
 // compliantRuleset is a Ruleset that clears CheckRulesets's bar: active,
-// carrying no bypass actor.
+// carrying no bypass actor, and read by a credential that could actually see
+// the bypass list. The last of the three is what makes "no bypass actor" mean
+// "nobody may skip this" rather than "we were not told".
 func compliantRuleset(id int, name string) Ruleset {
-	return Ruleset{ID: id, Name: name, Enforcement: "active"}
+	return Ruleset{ID: id, Name: name, Enforcement: "active", BypassActorsRead: true}
 }
 
 // TestCheckRulesetsAcceptsNoRulesets: a branch with no ruleset at all is not
@@ -41,9 +43,10 @@ func TestCheckRulesetsAcceptsAnActiveRulesetWithNoBypassActor(t *testing.T) {
 // compliant. CheckProtection cannot see this at all; only this gate can.
 func TestCheckRulesetsRefusesANonEmptyBypassActors(t *testing.T) {
 	rs := Rulesets{Applicable: []Ruleset{{
-		ID:          7,
-		Name:        "require a pull request",
-		Enforcement: "active",
+		ID:               7,
+		Name:             "require a pull request",
+		Enforcement:      "active",
+		BypassActorsRead: true,
 		BypassActors: []BypassActor{
 			{ActorType: "DeployKey", BypassMode: "always"},
 		},
@@ -62,9 +65,10 @@ func TestCheckRulesetsRefusesANonEmptyBypassActors(t *testing.T) {
 // first one found.
 func TestCheckRulesetsNamesEveryDistinctActorType(t *testing.T) {
 	rs := Rulesets{Applicable: []Ruleset{{
-		ID:          7,
-		Name:        "require a pull request",
-		Enforcement: "active",
+		ID:               7,
+		Name:             "require a pull request",
+		Enforcement:      "active",
+		BypassActorsRead: true,
 		BypassActors: []BypassActor{
 			{ActorType: "DeployKey", BypassMode: "always"},
 			{ActorType: "Team", BypassMode: "pull_request"},
@@ -73,6 +77,24 @@ func TestCheckRulesetsNamesEveryDistinctActorType(t *testing.T) {
 	problems := CheckRulesets(rs)
 	if !hasProblemContaining(problems, "DeployKey") || !hasProblemContaining(problems, "Team") {
 		t.Fatalf("problems %v do not name both bypass actor types", problems)
+	}
+}
+
+// TestCheckRulesetsRefusesABypassListThatWasNotRead is the same claim as the
+// delivery-ref gate's, on the branch that actually was bypassed on 2026-09-09.
+// A credential that cannot see bypass_actors decodes to the same empty list as a
+// ruleset that has none, so without this refusal CheckRulesets would report a ref
+// nobody can inspect as a ref nobody can bypass -- the one reading of "no
+// problems" that is not evidence of anything.
+func TestCheckRulesetsRefusesABypassListThatWasNotRead(t *testing.T) {
+	blind := compliantRuleset(7, "require a pull request")
+	blind.BypassActorsRead = false
+	problems := CheckRulesets(Rulesets{Applicable: []Ruleset{blind}})
+	if len(problems) == 0 {
+		t.Fatal("a ruleset whose bypass list could not be read was reported as compliant")
+	}
+	if !hasProblemContaining(problems, "bypass_actors") {
+		t.Fatalf("problems %v do not name the unreadable bypass list as the reason", problems)
 	}
 }
 
@@ -88,7 +110,7 @@ func TestCheckRulesetsNamesEveryDistinctActorType(t *testing.T) {
 func TestCheckRulesetsRefusesWhenTheSecondReadDisagreesOnEnforcement(t *testing.T) {
 	for _, enforcement := range []string{"evaluate", "disabled", ""} {
 		t.Run(enforcement, func(t *testing.T) {
-			rs := Rulesets{Applicable: []Ruleset{{ID: 3, Name: "r", Enforcement: enforcement}}}
+			rs := Rulesets{Applicable: []Ruleset{{ID: 3, Name: "r", Enforcement: enforcement, BypassActorsRead: true}}}
 			problems := CheckRulesets(rs)
 			if !hasProblemContaining(problems, "no longer reads as active") {
 				t.Fatalf("an applicable ruleset reading back as %q was not refused: %v", enforcement, problems)
@@ -102,7 +124,7 @@ func TestCheckRulesetsRefusesWhenTheSecondReadDisagreesOnEnforcement(t *testing.
 func TestCheckRulesetsChecksEveryApplicableRuleset(t *testing.T) {
 	rs := Rulesets{Applicable: []Ruleset{
 		compliantRuleset(1, "fine"),
-		{ID: 2, Name: "not fine", Enforcement: "active", BypassActors: []BypassActor{{ActorType: "Team", BypassMode: "always"}}},
+		{ID: 2, Name: "not fine", Enforcement: "active", BypassActorsRead: true, BypassActors: []BypassActor{{ActorType: "Team", BypassMode: "always"}}},
 	}}
 	problems := CheckRulesets(rs)
 	if len(problems) != 1 {
