@@ -21,6 +21,7 @@
 package forge
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -315,18 +316,37 @@ func sanitizeErr(err error, secrets ...string) error {
 	return errors.New(redact(err.Error(), secrets...))
 }
 
+// request sends a call that carries no body. Every read in this package goes
+// through it.
 func (c *Client) request(ctx context.Context, method, path string, out interface{}) error {
+	return c.requestBody(ctx, method, path, nil, out)
+}
+
+// requestBody is the one place a token is attached to an outgoing request, so
+// the rule "no credential ever reaches an error string" has a single home
+// rather than one copy per verb. payload may be nil; when it is not, the
+// Content-Type GitHub's write endpoints require is set alongside it, because a
+// POST without it is answered 415 in a way that reads like a permissions
+// problem.
+func (c *Client) requestBody(ctx context.Context, method, path string, payload []byte, out interface{}) error {
 	token, err := c.cachedToken(ctx)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+	var bodyReader io.Reader
+	if payload != nil {
+		bodyReader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
 	if err != nil {
 		return sanitizeErr(err, token)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
