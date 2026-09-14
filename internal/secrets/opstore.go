@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -34,6 +35,11 @@ type OP struct {
 	// "inject the seam as a field" shape KV takes for its *http.Client and
 	// Dir takes for OnFieldRead.
 	run func(ctx context.Context, env []string, args ...string) (stdout, stderr []byte, err error)
+
+	// http is the client the write path uses, defaulted by NewOP from
+	// OPConfig.HTTP -- the same field shape KV carries, because the reads and
+	// writes here deliberately do not share a transport.
+	http *http.Client
 }
 
 // OPConfig is everything NewOP needs to run `op` against one 1Password
@@ -58,6 +64,20 @@ type OPConfig struct {
 	// read once, never a value handed in directly. Required; NewOP refuses
 	// an empty one the same way NewKV refuses an empty JWTPath.
 	TokenFile string
+
+	// HTTP is the client the write path uses (opwrite.go). The reads in this
+	// file never touch it, because reads go through `op` and writes cannot:
+	// the CLI takes a field value in argv, and argv is not a place a secret
+	// belongs. Nil means a client with the package timeout; tests point it at
+	// an httptest.Server.
+	HTTP *http.Client
+
+	// WritableItem is the single item PutValue and PatchExpiry may write, in
+	// exactly the construction-time sense of KVConfig.WritableItem: empty
+	// means this OP reads only. Every existing caller leaves it unset, so a
+	// store built to sweep a vault gains no write ability by sharing a type
+	// with one that writes.
+	WritableItem string
 }
 
 // NewOP validates cfg and returns an OP, or refuses. Vault and TokenFile
@@ -77,7 +97,12 @@ func NewOP(cfg OPConfig) (*OP, error) {
 	if cfg.Bin == "" {
 		cfg.Bin = "op"
 	}
-	return &OP{cfg: cfg}, nil
+	o := &OP{cfg: cfg}
+	o.http = cfg.HTTP
+	if o.http == nil {
+		o.http = &http.Client{Timeout: httpTimeout}
+	}
+	return o, nil
 }
 
 // Name returns the vault name, so a sweep error and a "reported in two
