@@ -49,6 +49,7 @@ func TestSubcommandsAreExactlyTheDocumentedSet(t *testing.T) {
 		"render-digest",
 		"inventory",
 		"units",
+		"deploy-key",
 	}
 	if !reflect.DeepEqual(subcommands, want) {
 		t.Fatalf("subcommands = %v, want %v", subcommands, want)

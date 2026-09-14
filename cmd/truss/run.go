@@ -36,6 +36,7 @@ var subcommands = []string{
 	"render-digest",
 	"inventory",
 	"units",
+	"deploy-key",
 }
 
 func isSubcommand(name string) bool {
@@ -92,6 +93,16 @@ subcommands:
                          print the units a commit touches, one per line as
                          "<kind>\t<path>" in execution order (credentials,
                          tofu, ansible, render); --kind filters to one kind
+  deploy-key [--probe-only]
+                         provision the machine credential this deployment is
+                         configured for: mint an SSH keypair with ssh-keygen,
+                         store the private half in the 1Password leaf vault,
+                         then register the public half on the repository --
+                         that order, because the reverse can leave a live key
+                         whose private half exists nowhere. Idempotent: a
+                         recorded key_id means nothing is re-minted.
+                         --probe-only reads and writes nothing.
+                         Inert until DEPLOY_KEY_* are all set.
 `
 
 // run is the binary's only entry point besides main, and main's only job
@@ -139,6 +150,8 @@ func runEnv(ctx context.Context, args []string, getenv func(string) string, stdi
 		return cmdInventory(rest, stdout, stderr)
 	case "units":
 		return cmdUnits(ctx, rest, stdout, stderr)
+	case "deploy-key":
+		return cmdDeployKey(ctx, rest, getenv, stdout, stderr)
 	default:
 		// Unreachable: isSubcommand already filtered args[0]. Kept as an
 		// explicit refusal rather than a panic so a future subcommand
