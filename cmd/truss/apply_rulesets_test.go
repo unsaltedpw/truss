@@ -22,9 +22,10 @@ func TestApplyRefusesOnARulesetBypassActor(t *testing.T) {
 	forgeFake := &fakeForge{
 		ProtectionResult: compliantGatesProtection(),
 		RulesetsResult: gates.Rulesets{Applicable: []gates.Ruleset{{
-			ID:          42,
-			Name:        "require a pull request",
-			Enforcement: "active",
+			ID:               42,
+			Name:             "require a pull request",
+			Enforcement:      "active",
+			BypassActorsRead: true,
 			BypassActors: []gates.BypassActor{
 				{ActorType: "DeployKey", BypassMode: "always"},
 			},

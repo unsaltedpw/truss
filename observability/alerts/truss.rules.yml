@@ -315,11 +315,12 @@ groups:
   - name: truss-delivery
     rules:
       # ⚠️ THIS MEANS GATED COMMITS ARE PILING UP AND NO CLUSTER IS GETTING
-      # THEM. The gate runs before the push deliberately: a ref nothing
-      # protects is a path to production nobody is watching, so the pass
+      # THEM. The gate runs before the push deliberately: a ref nobody protects
+      # is a path to production nobody is watching, and a ref anybody with write
+      # access can push to is the same thing wearing a ruleset, so the pass
       # refuses to advance it rather than discover that after the fact.
-      # Every commit applied since protection lapsed is on main and reviewed,
-      # and none of them have been handed to a reconciler.
+      # Every commit applied since the ref stopped qualifying is on main and
+      # reviewed, and none of them have been handed to a reconciler.
       #
       # Not {pass="frequent"}-scoped, and deliberately: publishDeliveryRef
       # runs on the frequent pass whenever the queue moves and once more on
@@ -335,10 +336,13 @@ groups:
         annotations:
           summary: Truss refused to publish onto the delivery ref
           description: >-
-            No ruleset protects the ref a reconciler tracks, or none carries
-            non_fast_forward and deletion. Gated commits keep applying but
-            nothing is telling a cluster about them; create a ruleset on the
-            ref with both rules.
+            The rulesets on the ref a reconciler tracks do not add up to a gated
+            path to production: none applies, or one lacks non_fast_forward,
+            deletion or update, or its bypass list names an actor other than the
+            applier's own App, or that list could not be read at all. Gated
+            commits keep applying but nothing is telling a cluster about them.
+            The pass failure carries which of these it is, verbatim -- read it
+            rather than guessing at the ruleset.
 
   - name: truss-drift
     rules:

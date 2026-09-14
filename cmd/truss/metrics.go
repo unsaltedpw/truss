@@ -251,11 +251,14 @@ func (o *passObs) delivered(ok bool) {
 }
 
 // deliveryRefIsUnprotected records the one gate failure that means gated
-// commits are piling up with no cluster receiving them: no ruleset protects
-// the delivery ref, or none carries non_fast_forward and deletion. It is
-// never called for a tree with no delivery units -- "this deployment does
-// not use delivery" and "delivery is broken" are different facts, and this
-// metric exists to alarm only on the second.
+// commits are piling up with no cluster receiving them: the rulesets on the
+// delivery ref do not add up to a gated path to production. Since 2026-09-14
+// that covers four causes, not two -- no ruleset applies, a rule is missing
+// (non_fast_forward, deletion, or the update rule that restricts the pusher),
+// the bypass list names an actor other than the applier's own App, or the list
+// could not be read at all. It is never called for a tree with no delivery
+// units -- "this deployment does not use delivery" and "delivery is broken"
+// are different facts, and this metric exists to alarm only on the second.
 func (o *passObs) deliveryRefIsUnprotected() {
 	if o == nil {
 		return
@@ -501,7 +504,7 @@ func passMetrics(finished time.Time, duration time.Duration, driftRun bool, rep 
 			// comment says why conflating the two would be the wrong alarm for
 			// somebody who never asked for the feature.
 			Name:    "truss_delivery_ref_unprotected",
-			Help:    "1 when this pass refused to publish because no ruleset protects the delivery ref, or none carries non_fast_forward and deletion. Never 1 for a tree with no delivery units -- that is a different fact from delivery being broken.",
+			Help:    "1 when this pass refused to publish because the rulesets on the delivery ref do not make it a gated path to production: none applies, one lacks non_fast_forward, deletion or update, its bypass list names an actor other than the applier's own App, or that list could not be read. Never 1 for a tree with no delivery units -- that is a different fact from delivery being broken.",
 			Samples: []metrics.Sample{{Value: one(o.deliveryRefUnprotected)}},
 		},
 	)

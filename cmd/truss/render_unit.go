@@ -213,7 +213,7 @@ func publishDeliveryRef(ctx context.Context, d applyDeps, sha string) string {
 	if err != nil {
 		return fmt.Sprintf("could not read the rulesets protecting %s: %v", deliveryRef, err)
 	}
-	if problems := gates.CheckDeliveryRef(deliveryRef, rs); len(problems) > 0 {
+	if problems := gates.CheckDeliveryRef(deliveryRef, rs, d.Cfg.DeliveryBypassActorID); len(problems) > 0 {
 		d.Obs.deliveryRefIsUnprotected()
 		return strings.Join(problems, "; ")
 	}

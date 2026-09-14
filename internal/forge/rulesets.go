@@ -38,12 +38,23 @@ type wireEffectiveRule struct {
 // "pull_request" or "exempt" (the docs given for this task omitted
 // "exempt"; likewise included).
 type wireRuleset struct {
-	Name         *string `json:"name"`
-	Enforcement  *string `json:"enforcement"`
-	BypassActors []struct {
-		ActorType  *string `json:"actor_type"`
-		BypassMode *string `json:"bypass_mode"`
-	} `json:"bypass_actors"`
+	Name        *string `json:"name"`
+	Enforcement *string `json:"enforcement"`
+	// BypassActors is a POINTER to a slice, and the difference it preserves is
+	// the whole point: GitHub omits the key entirely for a credential that
+	// cannot see it. Measured 2026-09-14, an App installation token without
+	// Administration got no bypass_actors key back from a ruleset that did name
+	// an App. A plain slice would decode both "none set" and "you are blind" to
+	// nil and hand the gates a lie that reads as compliance.
+	BypassActors *[]wireBypassActor `json:"bypass_actors"`
+}
+
+type wireBypassActor struct {
+	// ActorID is what separates one App from another. ActorType alone says
+	// "Integration", which is a class, not the identity a deployment named.
+	ActorID    *int    `json:"actor_id"`
+	ActorType  *string `json:"actor_type"`
+	BypassMode *string `json:"bypass_mode"`
 }
 
 // Rulesets reads every ruleset that applies to branch, joining the two
@@ -105,10 +116,26 @@ func (c *Client) Rulesets(ctx context.Context, branch string) (gates.Rulesets, e
 		if w.Name != nil {
 			name = *w.Name
 		}
-		gr := gates.Ruleset{ID: id, Name: name, Enforcement: *w.Enforcement, Rules: types[id]}
-		for _, a := range w.BypassActors {
+		gr := gates.Ruleset{
+			ID: id, Name: name, Enforcement: *w.Enforcement, Rules: types[id],
+			// Absent key => not read, which gates/rulesetReadProblems refuses on.
+			BypassActorsRead: w.BypassActors != nil,
+		}
+		if w.BypassActors == nil {
+			applicable = append(applicable, gr)
+			continue
+		}
+		for _, a := range *w.BypassActors {
 			if a.ActorType == nil {
 				return gates.Rulesets{}, fmt.Errorf("forge: ruleset %d: a bypass actor has no actor_type", id)
+			}
+			// Same rule as ruleset_id and actor_type above: a field this package
+			// needs in order to attribute an actor is not optional, because an
+			// unnamed actor cannot be compared against the one the deployment
+			// allowed -- and "cannot be compared" must never become "not
+			// allowed".
+			if a.ActorID == nil {
+				return gates.Rulesets{}, fmt.Errorf("forge: ruleset %d: a bypass actor has no actor_id", id)
 			}
 			// bypass_mode's documented default is "always"; GitHub sends it
 			// explicitly in practice, but a decode that found the key absent
@@ -118,7 +145,7 @@ func (c *Client) Rulesets(ctx context.Context, branch string) (gates.Rulesets, e
 			if a.BypassMode != nil {
 				mode = *a.BypassMode
 			}
-			gr.BypassActors = append(gr.BypassActors, gates.BypassActor{ActorType: *a.ActorType, BypassMode: mode})
+			gr.BypassActors = append(gr.BypassActors, gates.BypassActor{ActorID: *a.ActorID, ActorType: *a.ActorType, BypassMode: mode})
 		}
 		applicable = append(applicable, gr)
 	}

@@ -202,6 +202,68 @@ func TestDriftCheckAcceptsOnlyZeroOrOne(t *testing.T) {
 	}
 }
 
+// TestDeliveryBypassActorIDMustBeAPositiveAppID covers the one config value
+// that decides who may skip the delivery ref's rules. Unset stays zero and
+// adds no problem at load time, because a tree with no delivery units is never
+// asked to publish a ref it does not use -- config cannot see the tree, so it
+// does not guess. Once a delivery ref is in play, gates refuses it until this
+// is set. "0" is refused on purpose: zero is the sentinel for "the deployment
+// named nobody", so configuring it would make an explicit choice
+// indistinguishable from an absent one.
+func TestDeliveryBypassActorIDMustBeAPositiveAppID(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       string
+		expectError bool
+		expectID    int
+	}{
+		{"unset", "", false, 0},
+		{"app id", "12345", false, 12345},
+		{"zero is the sentinel", "0", true, 0},
+		{"negative", "-3", true, 0},
+		{"not a number", "app_platform", true, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getenv := func(name string) string {
+				if name == "DELIVERY_BYPASS_ACTOR_ID" {
+					return tt.value
+				}
+				switch name {
+				case "REPO", "APPROVER", "LEDGER_BUCKET",
+					"LEDGER_APPLIED_PREFIX", "LEDGER_FAILED_PREFIX", "LEDGER_HEAD_KEY",
+					"HEARTBEAT_KEY", "PLAN_DIGEST_PREFIX", "WORKDIR", "OP_TOKEN_FILE":
+					return "dummy"
+				default:
+					return ""
+				}
+			}
+
+			cfg, problems := Load(getenv)
+
+			var named []string
+			for _, p := range problems {
+				if strings.Contains(p, "DELIVERY_BYPASS_ACTOR_ID") {
+					named = append(named, p)
+				}
+			}
+			if tt.expectError {
+				if len(named) == 0 {
+					t.Errorf("expected a refusal naming DELIVERY_BYPASS_ACTOR_ID=%q, got: %v", tt.value, problems)
+				}
+				return
+			}
+			if len(named) > 0 {
+				t.Errorf("unexpected refusal for %q: %s", tt.value, named)
+			}
+			if cfg.DeliveryBypassActorID != tt.expectID {
+				t.Errorf("DeliveryBypassActorID = %d for %q, want %d", cfg.DeliveryBypassActorID, tt.value, tt.expectID)
+			}
+		})
+	}
+}
+
 // TestHeartbeatPingURLAbsentMeansEmpty verifies that HEARTBEAT_PING_URL is a
 // true optional-with-no-default: leaving it unset produces an empty
 // HeartbeatPingURL and adds no problem, unlike a required var.

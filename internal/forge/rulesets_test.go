@@ -60,8 +60,105 @@ func TestRulesetsJoinsTheTwoReads(t *testing.T) {
 	if got.ID != 42 || got.Name != "require a pull request" || got.Enforcement != "active" {
 		t.Fatalf("Applicable[0] = %+v, want id 42, name set, enforcement active", got)
 	}
-	if len(got.BypassActors) != 1 || got.BypassActors[0].ActorType != "DeployKey" || got.BypassActors[0].BypassMode != "always" {
-		t.Fatalf("BypassActors = %+v, want one DeployKey actor with bypass_mode always", got.BypassActors)
+	if !got.BypassActorsRead {
+		t.Fatalf("BypassActorsRead = false, want true: the response carried a bypass_actors key")
+	}
+	// ActorID is the field that turns "an Integration may bypass this" into
+	// "this particular Integration may", so a decode that dropped it would
+	// leave gates unable to tell the applier's App from any other.
+	if len(got.BypassActors) != 1 || got.BypassActors[0].ActorID != 99 ||
+		got.BypassActors[0].ActorType != "DeployKey" || got.BypassActors[0].BypassMode != "always" {
+		t.Fatalf("BypassActors = %+v, want one DeployKey actor id 99 with bypass_mode always", got.BypassActors)
+	}
+}
+
+// TestRulesetsDistinguishesAnUnreadableBypassListFromAnEmptyOne is the reason
+// wireRuleset.BypassActors is a pointer to a slice. Measured 2026-09-14: an App
+// installation token without Administration got no bypass_actors key at all from
+// a ruleset that did name an App, while the same credential was told
+// current_user_can_bypass "always". Decoding both shapes to nil hands gates a
+// story that reads as compliance -- "nobody may skip these rules" -- for a
+// credential that was never told who may. So absent must survive the decode as
+// its own fact.
+func TestRulesetsDistinguishesAnUnreadableBypassListFromAnEmptyOne(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		read bool
+	}{
+		{
+			name: "key absent, the credential is blind",
+			body: `{"id": 42, "name": "r", "enforcement": "active"}`,
+			read: false,
+		},
+		{
+			name: "key present and empty, nobody may bypass",
+			body: `{"id": 42, "name": "r", "enforcement": "active", "bypass_actors": []}`,
+			read: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/app/installations/7654321/access_tokens":
+					mintHandler("ghs_x")(w, r)
+				case "/repos/acme/widgets/rules/branches/main":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`[{"type": "pull_request", "ruleset_id": 42}]`))
+				case "/repos/acme/widgets/rulesets/42":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.body))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, srv.URL)
+			rs, err := c.Rulesets(context.Background(), "main")
+			if err != nil {
+				t.Fatalf("Rulesets: %v", err)
+			}
+			if len(rs.Applicable) != 1 {
+				t.Fatalf("Applicable = %+v, want one ruleset", rs.Applicable)
+			}
+			if got := rs.Applicable[0].BypassActorsRead; got != tc.read {
+				t.Fatalf("BypassActorsRead = %v, want %v for body %s", got, tc.read, tc.body)
+			}
+			if len(rs.Applicable[0].BypassActors) != 0 {
+				t.Fatalf("BypassActors = %+v, want none in either case: the two shapes differ only in whether they were read", rs.Applicable[0].BypassActors)
+			}
+		})
+	}
+}
+
+// TestRulesetsRefusesABypassActorWithNoActorID: gates compares every actor
+// against the one App the deployment named, and an actor with no id cannot be
+// compared at all. Guessing "not the applier" would refuse a ruleset that may be
+// fine; guessing the other way would hand push-exclusivity to an unnamed
+// identity. So it is a decode error, the same discipline the ruleset_id and
+// actor_type cases above keep.
+func TestRulesetsRefusesABypassActorWithNoActorID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/7654321/access_tokens":
+			mintHandler("ghs_x")(w, r)
+		case "/repos/acme/widgets/rules/branches/main":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"type": "pull_request", "ruleset_id": 1}]`))
+		case "/repos/acme/widgets/rulesets/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id": 1, "name": "r", "enforcement": "active", "bypass_actors": [{"actor_type": "Integration", "bypass_mode": "always"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	rs, err := c.Rulesets(context.Background(), "main")
+	if err == nil {
+		t.Fatalf("a bypass actor with no actor_id was accepted; got %+v", rs)
 	}
 }
 

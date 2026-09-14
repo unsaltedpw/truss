@@ -46,6 +46,14 @@ type Ruleset struct {
 
 	BypassActors []BypassActor
 
+	// BypassActorsRead records whether rulesets/{id} carried a bypass_actors
+	// KEY at all. Absent is not the same as empty: measured 2026-09-14, a token
+	// without Administration received no key for a ruleset that did name an App,
+	// while the same credential was told current_user_can_bypass "always". So
+	// false means BLIND, never "nobody may skip these rules", and both gates
+	// refuse on it -- see rulesetReadProblems.
+	BypassActorsRead bool
+
 	// Rules is the rule types this ruleset contributes to the ref in
 	// question -- "deletion", "non_fast_forward", "pull_request" and so on,
 	// in GitHub's own vocabulary rather than a normalised one. CheckRulesets
@@ -67,8 +75,31 @@ type Ruleset struct {
 // or "exempt" (skipped silently, no audit entry) -- GitHub's documented
 // values, verified against the REST reference rather than assumed.
 type BypassActor struct {
+	// ActorID is GitHub's numeric actor id. It is what tells one App from
+	// another: ActorType alone says "an Integration", which names a CLASS of
+	// credential rather than the single one a deployment named, so a bypass list
+	// holding some other App would still read as compliant without it.
+	ActorID int
+
 	ActorType  string
 	BypassMode string
+}
+
+// isApplier reports whether this actor is the App the deployment named.
+//
+// applierAppID 0 means the deployment named nobody, which answers false rather
+// than acting as a wildcard -- the absence of a configured App is not a licence
+// for every App.
+//
+// BypassMode "exempt" is refused even on an id match, because GitHub documents
+// it as skipping the rules with no audit entry. An unlogged bypass on the ref
+// between "reviewed" and "running" is worse than a logged one: the audit log is
+// the entire reason that ref exists.
+func (a BypassActor) isApplier(applierAppID int) bool {
+	if applierAppID == 0 || a.ActorID != applierAppID {
+		return false
+	}
+	return a.ActorType == "Integration" && a.BypassMode != "exempt"
 }
 
 // Rulesets is every ruleset the forge reported as applying to the branch
@@ -112,14 +143,8 @@ type Rulesets struct {
 // bypass_actors read this gate depends on. Fail closed rather than decide
 // which story is true.
 func CheckRulesets(rs Rulesets) []string {
-	var problems []string
+	problems := rulesetReadProblems(rs)
 	for _, r := range rs.Applicable {
-		if r.Enforcement != "active" {
-			problems = append(problems, fmt.Sprintf(
-				"ruleset %q (id %d) applies to this branch but no longer reads as active (now %q): "+
-					"the two reads of it disagree, which this gate treats as a race or an attempt to dodge it",
-				r.Name, r.ID, r.Enforcement))
-		}
 		if len(r.BypassActors) == 0 {
 			continue
 		}
@@ -137,6 +162,36 @@ func CheckRulesets(rs Rulesets) []string {
 			"ruleset %q (id %d) has a non-empty bypass_actors (%s): a named actor can skip its rules entirely -- "+
 				"this is how a push straight to main was accepted on 2026-09-09 despite branch protection reading compliant",
 			r.Name, r.ID, strings.Join(who, ", ")))
+	}
+	return problems
+}
+
+// rulesetReadProblems is what every ruleset gate has to believe before it can
+// reason about contents: the two reads agree on enforcement, and the bypass
+// list was actually read.
+//
+// The second one has no effect on the verdict a naive reader would expect,
+// which is exactly why it is refused. A credential that cannot see
+// bypass_actors produces the same empty list as a ruleset that has none, and
+// the difference between those two is the difference between "protected" and
+// "unauditable". CheckRulesets would otherwise conclude that a ref nobody can
+// inspect is a ref nobody can bypass.
+func rulesetReadProblems(rs Rulesets) []string {
+	var problems []string
+	for _, r := range rs.Applicable {
+		if r.Enforcement != "active" {
+			problems = append(problems, fmt.Sprintf(
+				"ruleset %q (id %d) applies to this branch but no longer reads as active (now %q): "+
+					"the two reads of it disagree, which this gate treats as a race or an attempt to dodge it",
+				r.Name, r.ID, r.Enforcement))
+		}
+		if !r.BypassActorsRead {
+			problems = append(problems, fmt.Sprintf(
+				"ruleset %q (id %d) returned no bypass_actors at all, so this credential cannot see who may skip its "+
+					"rules: reading it as an empty list would turn a blind read into a clean verdict -- measured "+
+					"2026-09-14, an App token without Administration omits the key even when a bypass actor is set",
+				r.Name, r.ID))
+		}
 	}
 	return problems
 }

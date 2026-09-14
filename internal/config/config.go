@@ -17,6 +17,17 @@ type Config struct {
 	RequiredCheck                                 string // "plan"
 	ExpiryWarnDays                                int    // defaulted 30
 	DriftOnly                                     bool
+	// DeliveryBypassActorID is the GitHub App id of the one identity allowed to
+	// bypass the delivery ref's rules -- the applier's own App. Zero means the
+	// deployment named nobody, which is a real answer rather than a value to
+	// default: without an `update` rule on the ref nothing needs it, and
+	// gates.CheckDeliveryRef treats it as "cannot verify", so a rule arriving
+	// unaccompanied is refused with a message naming this variable.
+	//
+	// It is an identifier, not a credential. Like the tailnet name on the
+	// applier side, it belongs stated in the manifest where the diff shows it,
+	// because the thing it decides is who may skip a path to production.
+	DeliveryBypassActorID int
 	// HeartbeatPingURL is a dead-man's-switch monitor (Healthchecks.io,
 	// Cronitor, ...) the pass pings on every completion, success or not.
 	// Optional with NO default: empty means the feature is off and nothing
@@ -136,6 +147,16 @@ func Load(getenv func(string) string) (Config, []string) {
 	// line the moment somebody got it wrong.
 	if pushURL := getenv("METRICS_PUSH_URL"); pushURL != "" {
 		cfg.MetricsPushURL = pushURL
+	}
+
+	if v := getenv("DELIVERY_BYPASS_ACTOR_ID"); v != "" {
+		id, err := strconv.Atoi(v)
+		if err != nil || id <= 0 {
+			problems = append(problems, fmt.Sprintf(
+				"refusing to start: DELIVERY_BYPASS_ACTOR_ID must be a positive GitHub App id, not %q", v))
+		} else {
+			cfg.DeliveryBypassActorID = id
+		}
 	}
 
 	// Load DRIFT_CHECK - accepts only 0, 1, or unset
