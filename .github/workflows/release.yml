@@ -157,7 +157,7 @@ jobs:
             [ -n "$tofu" ] || continue
             tag="${IMAGE}:${GITHUB_REF_NAME}-tofu${tofu}"
             echo "::group::$tag"
-            docker build --build-arg "OPENTOFU_VERSION=${tofu}" --build-arg "KUSTOMIZE_VERSION=$(cat kustomize-version)" --build-arg "ANSIBLE_VERSION=$(cat ansible-version)" --build-arg TARGETARCH=amd64 -t "$tag" .
+            docker build --build-arg "OPENTOFU_VERSION=${tofu}" --build-arg TARGETARCH=amd64 -t "$tag" .
             docker push "$tag"
             # The digest is what a consumer pins; printing it here means it can
             # be read off the release without a registry round-trip.

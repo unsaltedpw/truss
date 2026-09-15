@@ -116,25 +116,6 @@ scan() { # pattern description
   # segment; the manifest line is the same record shape as the others.
   hits=$(echo "$hits" | grep -vE '^Dockerfile:[0-9]+:[[:space:]]*"?https://github\.com/opentofu/opentofu/releases/download/[A-Za-z0-9._${}-]+/[A-Za-z0-9._${}-]+"?;?[[:space:]]*\\?$' || true)
   hits=$(echo "$hits" | grep -vE '^scripts/toolchain:[0-9]+:tofu\|(amd64|arm64)\|[0-9.]+\|[A-Za-z0-9._-]+\|https://github\.com/opentofu/opentofu/releases/download/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || true)
-  # kustomize's release archive and its published checksums, under exactly the
-  # rule above and with the same limit. `kubernetes-sigs/kustomize` is a
-  # public project whose release URLs are identical for every user; the path
-  # after the tag carries a version and an architecture and nothing of ours.
-  # Added 2026-09-10 when internal/render started shelling out to kustomize
-  # and the image had to carry it.
-  #
-  # ⚠️ A SECOND ANCHORED RULE RATHER THAN A WIDER FIRST ONE. The OpenTofu
-  # exemption above is pinned to `opentofu/opentofu/releases/download/`, and
-  # relaxing it to cover two projects would mean matching `github.com/<owner>/
-  # <repo>/releases/download/` -- which is the shape that names OUR
-  # infrastructure as readily as anyone's. Two narrow rules stay narrow; one
-  # general rule does not.
-  #
-  # ⚠️ THE TAG SEGMENT NEEDS % BECAUSE THE TAG IS `kustomize%2Fv5.7.1`. That
-  # project tags every module in one repository, so the tag carries an encoded
-  # slash. Leaving % out of the class makes this rule silently fail to match
-  # and the scan refuses a URL the exemption was written for.
-  hits=$(echo "$hits" | grep -vE '^Dockerfile:[0-9]+:[[:space:]]*"?https://github\.com/kubernetes-sigs/kustomize/releases/download/[A-Za-z0-9._%${}-]+/[A-Za-z0-9._${}-]+"?;?[[:space:]]*\\?$' || true)
   # ⚠️ THE QUERY-TOOLS ACTION FETCHES promtool AND logcli, anchored to that one
   # composite action file for the same reason the opentofu lines above are
   # anchored. Prometheus and Loki release URLs name the vendor's public
