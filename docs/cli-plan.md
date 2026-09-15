@@ -106,7 +106,7 @@ subcommand should all work, and all should carry usage examples.
 
 ### G2 — No `--json` on `status` or `why`
 
-`inventory validate --json` is the only machine-readable output in the binary.
+There is no machine-readable output anywhere in the binary today.
 `status` and `why` are exactly what a runbook or a monitoring wrapper would
 consume.
 
@@ -333,8 +333,7 @@ point they advise against consuming it to monitor deployments. So:
 
 - Under `--json`, **stdout carries exactly one JSON document and nothing
   else.** Every human line goes to stderr or is suppressed.
-- **Exit codes do not change under `--json`.** The in-repo precedent is
-  `inventory validate --json`, which keeps its exit 1. Asserted, not assumed.
+- **Exit codes do not change under `--json`.** Asserted, not assumed.
 - **Failure paths emit JSON too.** A consumer that must parse stdout on
   success and read English on failure has no contract at all.
 
@@ -353,11 +352,10 @@ line — one key per section, none omitted:
       "record":  {"state": "applied|noop|skipped|failed|absent|unknown"},
       "queue":   {"state": "at_head|ahead|behind|unknown", "head": "<sha>"},
       "units":   {"state": "known|unknown", "shared_input": false,
-                  "tofu": [], "ansible": [], "render": []},
+                  "tofu": []},
       "digests": {"state": "filed|n/a|unknown", "pr_head": "<sha>",
                   "credentials_exempt": false,
-                  "tofu": {"<root>": "present|absent|unknown"},
-                  "render": {"<unit>": "present|absent|unknown"}}
+                  "tofu": {"<root>": "present|absent|unknown"}}
     }
 
 - `record` adds `reason` and `at` for `skipped` and `failed`, and `roots`,
@@ -696,12 +694,11 @@ Written down so the next person does not assume it was forgotten.
   entirely on quit.
 - **`--` handling everywhere.** Added only where a free-form value can begin
   with `-`: `ledger` keys and `skip --reason`. POSIX asks for it generally;
-  doing it across all fourteen subcommands is churn for commands that take no
+  doing it across all twelve subcommands is churn for commands that take no
   such values.
 - **Rewriting the four existing commands.** See §0.1.
 - **Any change to `apply`, `publish`, `gate`, `token`, `expiry`, `notify`,
-  `plan-digest`, `render-digest`, `inventory` or `units`**, beyond gaining
-  a help text.
+  `plan-digest` or `units`**, beyond gaining a help text.
 
 ---
 

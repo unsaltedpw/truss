@@ -7,12 +7,13 @@
 
 **Approved, or not applied.**
 
-Truss is a self-hosted GitOps applier for OpenTofu, Ansible and Kubernetes. It
-runs inside your cluster, holds the only credentials in your delivery pipeline
-that can change anything, and applies a merged commit only after checking for
-itself that a human approved that exact commit — and that what it is about to
-run is what they reviewed. It does not care who wrote the change: a teammate,
-a script, or a coding agent.
+Truss is a self-hosted, gated OpenTofu applier. It runs inside your cluster,
+holds the only credentials that can change your infrastructure, and applies a
+merged commit only after checking for itself that a human approved that exact
+commit — and that what it is about to run is what they reviewed. It also
+mints and rotates the credentials your infrastructure depends on, and reports
+drift nobody asked for. It does not care who wrote the change: a teammate, a
+script, or a coding agent.
 
 ## The problem
 
@@ -41,14 +42,9 @@ component holding the keys checks that approval itself, every time.
   head, merge commit signed by GitHub. Turn protection off and you have not
   weakened Truss. You have stopped it.
 - **What was reviewed is what runs.** Truss plans each OpenTofu configuration
-  and renders each Kustomize directory again, on its own, and refuses anything
-  that does not match the digest CI filed. It takes a fingerprint from CI,
-  never a plan to execute. A missing digest is a refusal, not a skip.
-- **One gate across three layers, in order.** OpenTofu builds the
-  infrastructure. Ansible configures the machines — only hosts the inventory
-  declares, each seen reachable when the play runs. Manifests reach your
-  clusters through a `queued` branch that a reconciler such as Argo CD or Flux
-  tracks, and Truss moves it only after every gate has passed.
+  again, on its own, and refuses anything that does not match the digest CI
+  filed. It takes a fingerprint from CI, never a plan to execute. A missing
+  digest is a refusal, not a skip.
 - **Credentials do not rot quietly.** Truss re-plans the configuration that
   creates your credentials every day, so one written to mint by date rotates
   with no cron job and no human. What no API can mint, it watches: anything
@@ -70,22 +66,22 @@ flowchart LR
     subgraph cluster ["your cluster · the only write credentials"]
         T["Truss<br/>check approval · re-plan · compare"]
     end
-    PR[pull request] --> CI["CI · read-only<br/>plan · render · file digests"]
+    PR[pull request] --> CI["CI · read-only<br/>plan · file digests"]
     CI --> AP["approver approves<br/>that exact commit"]
     AP --> M[main]
     M -. "pulled on a schedule" .-> T
-    T -->|matches| O[OpenTofu] --> A[Ansible] --> Q["queued branch<br/>for Argo CD or Flux"]
+    T -->|matches| O["OpenTofu apply"]
     T -->|differs or missing| R["refuse · hold the queue · alert"]
 ```
 
 1. Someone opens a pull request.
-2. CI plans and renders it with read-only credentials, comments the diff, and
-   files a digest of each plan and render.
+2. CI plans it with read-only credentials, comments the diff, and files a
+   digest of the plan.
 3. The approver approves, and GitHub merges.
 4. Truss, a scheduled job in your cluster, reads `main` and checks protection,
    approval and merge provenance for every new commit.
-5. It plans and renders each commit again, compares against the digests, then
-   applies the OpenTofu, runs the Ansible, and moves `queued`.
+5. It plans each commit again, compares against the digest, then applies the
+   OpenTofu.
 6. A refusal or a failed apply stops the queue at that commit and says why.
    Nothing behind it is applied until that commit is resolved.
 
@@ -115,8 +111,6 @@ Truss has no API to hand an agent. The only way in is a merged commit.
 - **Hosted platforms such as HCP Terraform and Spacelift** bring a web UI,
   policy as code, team permissions and agent integrations. Truss has none of
   those. It is one binary in your cluster.
-- **Argo CD and Flux** are not alternatives. They apply manifests; Truss
-  decides which commit they are allowed to see.
 
 Choose something else if you need GitLab, several approvers, apply before
 merge, a policy engine or a UI.
@@ -125,13 +119,13 @@ merge, a policy engine or a UI.
 
 - **GitHub**: a GitHub App, branch protection (which some plans cannot enable
   on a private repository), and one approver named in `CODEOWNERS`.
-- **OpenTofu** at one pinned version with a provider allowlist, plus Kustomize
-  and Ansible, all carried in the image.
+- **OpenTofu** at one pinned version with a provider allowlist, carried in
+  the image.
 - **An S3-compatible bucket** for the ledger and state.
 - **A vault**: HashiCorp Vault or 1Password.
 - **Telegram** for alerts, and optionally a Prometheus Pushgateway for metrics.
 - **A CI plan job you write**: read-only credentials, a comment with the diff,
-  and a digest filed for each plan and render.
+  and a digest filed for each plan.
 - **Linux**, amd64 or arm64.
 
 The repository, the approver, the bucket, the vault and every endpoint come
@@ -147,14 +141,12 @@ refuses to start rather than falling back to something plausible.
 - **Anything about secrets set by hand.** A credential typed straight into a
   provider's console is outside all of this.
 - **That every change is digest-checked.** The credentials configuration is
-  exempt because CI cannot plan it, and Ansible plays carry no digest; both
-  are reviewed as code. Deleting a Kustomize directory is a prune, not a
-  render. [docs/design.md](docs/design.md) lists every exemption and why.
+  exempt because CI cannot plan it; it is reviewed as code, the same way
+  every other root is reviewed before CI ever sees a plan.
+  [docs/design.md](docs/design.md) lists every exemption and why.
 - **That planning runs no code.** Provisioners and `helm_release` are refused,
   but `data "external"` and `data "http"` execute during Truss's own plan of
   an approved commit, before any gate can see them.
-- **That only Truss moves `queued`.** Force pushes and deletion there are
-  refused; an ordinary fast-forward by anyone with write access is not.
 - **That nothing gets past a gate.** Two overrides exist, and neither is
   quiet. `truss skip <sha>` walks past one commit Truss already refused, and
   announces itself before it writes. Turning branch protection off stops
@@ -166,8 +158,7 @@ refuses to start rather than falling back to something plausible.
 Truss runs one real deployment: cloud infrastructure, machines and a
 Kubernetes cluster, all changed through it. Each release builds reproducible
 Linux binaries with checksums and build provenance, and a container image
-carrying the pinned OpenTofu, Kustomize and Ansible. It is licensed under
-[Apache 2.0](LICENSE).
+carrying the pinned OpenTofu. It is licensed under [Apache 2.0](LICENSE).
 
 There is no installer and no packaged CI job yet. Adopting it today means
 reading [docs/design.md](docs/design.md) and

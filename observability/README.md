@@ -159,7 +159,6 @@ editing; pick your Prometheus from the dropdown on first open.
 | `truss-credentials` | a credential expired, expiring within 14 days, or recording no expiry; a sweep that could not run |
 | `truss-rotation` | rotation failed; rotation is not running at all; the publisher did not confirm the write |
 | `truss-queue` | the queue is deep and not draining |
-| `truss-delivery` | the pass refused to publish onto the delivery ref because nothing protects it |
 | `truss-drift` | a root drifted; a root whose drift could not be checked |
 
 `alerts/vault.rules.yml` covers the store itself, because truss can be
@@ -213,8 +212,6 @@ grouping key, on top of the labels below.
 | `truss_gate_ok` | `gate` | 1 when `protection` / `rulesets` met the bar |
 | `truss_digest_checks` | | roots whose digest was compared against the approved one |
 | `truss_digest_refusals` | | roots refused because the plan did not match |
-| `truss_render_units` | | delivery units this pass rendered and compared against the digest CI filed |
-| `truss_render_refusals` | | renders refused because the rendered bytes did not match -- a different gate over a different artefact than `truss_digest_refusals` |
 | `truss_root_duration_seconds` | `root`, `phase` | seconds in `init`, `plan`, `show`, `apply`, `drift` |
 | `truss_root_resource_changes` | `root` | resource changes in the plan that was applied |
 | `truss_root_failures` | `root` | times this root failed or was refused |
@@ -227,15 +224,13 @@ grouping key, on top of the labels below.
 | `truss_publish_attempted` | | 1 when the publisher sidecar was contacted |
 | `truss_publish_ok` | | 1 when it answered without an error |
 | `truss_publish_expiries` | | expiry dates the publisher recorded |
-| `truss_delivery_published` | | 1 when this pass fast-forwarded the delivery ref; 0 covers a refusal, a push error, and a tree with no delivery units |
-| `truss_delivery_ref_unprotected` | | 1 when the pass refused to publish because no ruleset protects the delivery ref -- never 1 for a tree with no delivery units, see below |
 | `truss_expiry_sweep_ok` | | 1 when the daily sweep completed and **earned** its answer |
 | `truss_expiry_findings` | | credentials the sweep reported |
 | `truss_credential_days_left` | `credential` | days until expiry; negative means it went |
 | `truss_credential_expiry_unrecorded` | `credential` | 1 per credential recording no expiry at all |
 | `truss_build_info` | `go_version`, `revision` | always 1; the labels are the payload |
 
-### The five that are easy to misread
+### The four that are easy to misread
 
 **`truss_queue_depth` absent is not `truss_queue_depth` zero.** A pass refused
 at the branch-protection gate never runs the commit loop, so it knows nothing
@@ -261,14 +256,6 @@ whose lifetime nothing is watching, so its lapse gets discovered by an outage.
 "We looked and it drifted" and "we could not tell" are not the same fact, and
 the second is the one that hides a broken provider credential. Nothing folds
 them together; neither should a panel.
-
-**`truss_delivery_ref_unprotected` is never 1 for a tree with no delivery
-units.** A deployment that has committed no manifest at all never asks the
-forge about the ref, so it has nothing to say about its protection.
-`truss_delivery_published` is 0 in that case too, and reads identically to a
-genuine refusal unless this series is read alongside it -- "not using
-delivery" and "delivery is broken" are different facts, and only the second
-one should wake anybody up.
 
 ### The failure classes
 
