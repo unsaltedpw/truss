@@ -67,37 +67,7 @@ type applyDeps struct {
 	Telegram notify.Telegram
 	Git      gitDriver
 	NewTofu  tofuFactory
-	// NewRender builds the Kustomize runner for a delivery unit. Separate
-	// from NewTofu because the two kinds are different executors with
-	// different environments -- a render gets no credentials at all, since
-	// rendering reads nothing but the tree.
-	NewRender renderFactory
-	// NewAnsible builds the ansible-playbook runner for a play. Separate
-	// from NewRender and NewTofu for the same reason those are separate
-	// from each other: three kinds, three executors, three environments --
-	// and this one's is the narrowest, because a play's tasks run on
-	// somebody else's machine (see ansibleEnv).
-	NewAnsible ansibleFactory
-	// Tailnet lists the devices on the tailnet. It is what backs ONE
-	// provider of host evidence for the ansible target gate -- see
-	// hostEvidence, and evidenceProviders, which is what turns this into
-	// one. Nil means no tailscale credential is mounted, in which case the
-	// tailscale provider simply does not exist this pass, and any host
-	// that is reached that way is refused rather than treated as having no
-	// unknown devices near it: a gate with no evidence is a gate that
-	// passes.
-	Tailnet tailnetLister
-	// Dial is how the declared-address evidence provider reaches a
-	// machine. Nil means a real net.Dialer, which is what production uses;
-	// a test supplies its own so that "this host is down" costs neither a
-	// DNS lookup nor a real timeout, and so the suite does not depend on
-	// what the machine running it can route to.
-	//
-	// ⚠️ IT IS A SEAM, NOT A KNOB. Nothing reads it from configuration and
-	// nothing should: which addresses the applier may dial is decided by
-	// the reviewed inventory, and HOW it dials them has one correct answer.
-	Dial        dialer
-	Now         func() time.Time
+	Now      func() time.Time
 	Stderr      io.Writer
 	VaultConfig secrets.KVConfig
 	// CloudflareBaseURL overrides the Cloudflare API host for the expiry
@@ -112,10 +82,6 @@ type applyDeps struct {
 	// implicitly -- §2 item 9) can still find the tofu binary and its
 	// plugin cache.
 	PATH, HOME string
-	// CollectionsPath is ANSIBLE_COLLECTIONS_PATH, passed through to a
-	// play by name. See ansibleCollectionsPath for why an image's own ENV
-	// cannot do this job.
-	CollectionsPath string
 	// HandoffSocket is the path to the publisher's Unix socket
 	// (design publisher-identity-design.md §3). Set by loadHandoffConfig,
 	// which refuses to start rather than leave it empty on the one pass
@@ -349,19 +315,6 @@ func cmdApply(ctx context.Context, args []string, getenv func(string) string, st
 		return 1
 	}
 
-	// ⚠️ A MISSING TAILSCALE CREDENTIAL IS NOT AN ERROR HERE, AND IS ALSO
-	// NOT FORGIVEN LATER. Most deployments have no tailnet and no plays, and
-	// demanding the credential at startup would stop them on upgrade for a
-	// feature they never asked for. So the client is nil, and
-	// runAnsibleUnits refuses on nil the moment a play exists -- the refusal
-	// lands on the commit that introduces a play rather than on every pass
-	// of every deployment, which is where it is both correct and actionable.
-	tsClient, err := loadTailnetClient(dir, getenv("TAILSCALE_API_BASE_URL"))
-	if err != nil {
-		fmt.Fprintf(stderr, "refusing to start: %v\n", err)
-		return 1
-	}
-
 	deps := applyDeps{
 		Cfg:      cfg,
 		Dir:      dir,
@@ -372,26 +325,14 @@ func cmdApply(ctx context.Context, args []string, getenv func(string) string, st
 		NewTofu: func(env []string) tofuRunner {
 			return plan.Runner{Bin: "tofu", PluginDir: cfg.PluginDir, Stderr: stderr, Env: env}
 		},
-		NewRender:         newRenderFactory(getenv, stderr),
-		NewAnsible:        newAnsibleFactory(getenv, stderr),
 		Now:               time.Now,
 		Stderr:            stderr,
 		VaultConfig:       vcfg,
 		CloudflareBaseURL: getenv("CLOUDFLARE_API_BASE_URL"),
 		PATH:              getenv("PATH"),
 		HOME:              getenv("HOME"),
-		CollectionsPath:   ansibleCollectionsPath(getenv),
 		HandoffSocket:     handoffSocket,
 		Handoff:           handoff.Send,
-	}
-	// Assigned separately rather than in the literal: a nil *tailnet.Client
-	// stored in a non-nil interface is not nil, and runAnsibleUnits' whole
-	// refusal turns on `d.Tailnet == nil`. Writing `Tailnet: tsClient` with
-	// tsClient a typed nil pointer would sail past that check and then
-	// panic, or worse, return an empty device list that reads as "no
-	// unknown devices".
-	if tsClient != nil {
-		deps.Tailnet = tsClient
 	}
 
 	result := runApplyPass(ctx, deps, last)
@@ -474,7 +415,6 @@ func runApplyPass(ctx context.Context, d applyDeps, last string) applyResult {
 		rotationApplied  bool
 		drifted, errored []string
 		driftRun         = d.Cfg.DriftOnly
-		queueAdvanced    bool
 		driftSkipped     string
 	)
 
@@ -643,7 +583,6 @@ func runApplyPass(ctx context.Context, d applyDeps, last string) applyResult {
 		if contended {
 			d.Obs.contended()
 		}
-		queueAdvanced = newLast != last
 		last = newLast
 		appliedCount = applied
 		noopCount = noop
@@ -668,30 +607,6 @@ func runApplyPass(ctx context.Context, d applyDeps, last string) applyResult {
 		// heartbeat.
 		rotationSummary = map[string]string{"skipped": "rotation runs on the daily pass"}
 		driftSummary = map[string]string{"skipped": "not a drift run"}
-	}
-
-	// Publishing the delivery ref is the last thing the queue does, and only
-	// when the queue is clean: a reconciler tracking this ref must never see
-	// a commit this pass refused.
-	//
-	// ⚠️ NOT ON EVERY PASS, AND THE REASON IS A BUDGET RATHER THAN TIDINESS.
-	// Reading the rulesets that protect the ref is a forge call, and the
-	// frequent pass runs every five minutes -- asking 288 times a day to
-	// re-answer a question that only changes when somebody edits repository
-	// settings is the shape of spending that exhausted a service account's
-	// hourly allowance on 2026-09-07. So it runs when the queue actually
-	// moved, plus once on the daily pass, which is what makes a ref left
-	// behind by an earlier failure heal itself rather than wait for the next
-	// commit to arrive.
-	//
-	// A push that fails is a pass failure: the commits applied, and the
-	// cluster was not told. HEAD has already advanced, so nothing will retry
-	// those commits -- the daily publish is what closes that, and the alert
-	// is what makes somebody look before then.
-	if failure == "" && (queueAdvanced || driftRun) {
-		if reason := publishDeliveryRef(ctx, d, last); reason != "" {
-			failure = reason
-		}
 	}
 
 	// The publisher handoff (design publisher-identity-design.md §3, §9):
@@ -936,18 +851,16 @@ func toLedgerExpiring(in []secrets.Expiring) []ledger.Expiring {
 	return out
 }
 
-// tofuUnitsFor derives the credentials/tofu roots a commit touches, the
-// sibling of renderUnitsFor (render_unit.go) reading the other half of the
-// same repo.TouchedUnits call.
+// tofuUnitsFor derives the credentials/tofu roots a commit touches, reading
+// the credentials/tofu half of repo.TouchedUnits.
 //
 // ⚠️ treeUnits HERE IS THE CREDENTIALS/TOFU UNITS OF THE TREE, NOT EVERY
-// UNIT -- fed from gitDriver.TreeTofuUnits, which never lists "ansible/plays"
-// or a render unit, the same way TreeRenderUnits never lists a tofu one. The
+// UNIT -- fed from gitDriver.TreeTofuUnits, which lists only "credentials",
+// "platform", "clusters/<name>", "hosts/<name>" and "projects/<name>". The
 // shared-input branch of TouchedUnits returns everything in whichever tree
-// it was handed, so this one returns exactly the credentials/tofu units that
-// exist and renderUnitsFor returns exactly the render ones -- the two calls
-// partition TouchedUnits' output by construction, never by filtering a
-// shared listing after the fact.
+// it was handed, so restricting the tree listing to those five shapes is
+// what keeps this function from ever returning a unit of a kind truss no
+// longer manages.
 func tofuUnitsFor(changedFiles, treeUnits []string) []string {
 	var out []string
 	for _, u := range repo.TouchedUnits(changedFiles, treeUnits) {
@@ -1030,40 +943,6 @@ func runCommitLoop(ctx context.Context, d applyDeps, last string, cc *credCache)
 			return last, applied, noop, passFailure{Reason: reason, SHA: sha, Head: headSHA}, false
 		}
 
-		// ⚠️ THE INVENTORY GATE RUNS HERE, BEFORE ANY ROOT IS DERIVED OR ANY
-		// UNIT RENDERED, FOR THE SAME REASON THE COMMIT GATE MOVED AHEAD OF
-		// THEM: an inventory-only commit -- one that touches inventory/ or
-		// deliveries/ and nothing under platform/ or projects/ -- touches no
-		// root and no render unit, so running this after the noop check below
-		// would let it be recorded as uneventful and waved through unchecked.
-		// See checkInventoryAtCommit's own doc for what it refuses and the
-		// two cases it deliberately skips rather than refuses.
-		//
-		// ⚠️ sha, NOT headSHA. checkInventoryAtCommit diffs whatever commit
-		// it is handed against THAT COMMIT'S OWN git first parent
-		// (d.Git.Parent), so the commit handed in has to be the one actually
-		// sitting in main's history -- sha, the value this loop is walking.
-		// headSHA is checkCommitGate's pr.HeadSHA, a PR branch's own head
-		// commit: correct for the approval check, which must ask "did the
-		// approver review this exact content," but wrong here, where its
-		// first parent is whatever the PR branch's own history says came
-		// before it, not sha's real predecessor on main. A PR resynced with
-		// more than one `git merge origin/main` builds exactly that trap:
-		// headSHA's parent is the PR's own prior sync commit, so a stateful
-		// placement change that landed on main INSIDE that merge bubble is
-		// invisible to headSHA's parent and can surface as a false move
-		// against a completely unrelated later commit instead. Measured
-		// live 2026-09-12 (platform PR #120, TestInventoryGateComparesMainsCommitNotThePRHeadSHA).
-		if reason := checkInventoryAtCommit(ctx, d, sha); reason != "" {
-			d.Obs.failed(classConfig)
-			if err := d.Journal.PutFailed(ctx, sha, reason); err != nil {
-				d.Obs.ledgerError()
-				d.Obs.failed(classLedger)
-				reason = reason + fmt.Sprintf(" (and could not record the failure: %v)", err)
-			}
-			return last, applied, noop, passFailure{Reason: reason, SHA: sha, Head: headSHA}, false
-		}
-
 		changedFiles, err := d.Git.ChangedFiles(ctx, sha)
 		if err != nil {
 			d.Obs.failed(classRepo)
@@ -1077,12 +956,11 @@ func runCommitLoop(ctx context.Context, d applyDeps, last string, cc *credCache)
 		// clusters/<name> and hosts/<name> as KindTofu since the kind layer
 		// was added, with no second reader for them: a commit touching only
 		// clusters/beta/main.tf produced no roots from TouchedRoots and was
-		// filed as a noop with HEAD advanced past it. tofuUnitsFor
-		// (render_unit.go's sibling, below) reads the credentials+tofu half
-		// of TouchedUnits instead, which does know about them -- see
-		// TestTouchedUnitsTofuHalfMatchesTouchedRoots (internal/repo) for why
-		// this is a safe swap: for every commit shape the parity corpus
-		// covers, the two produce the identical set.
+		// filed as a noop with HEAD advanced past it. tofuUnitsFor reads the
+		// credentials+tofu half of TouchedUnits instead, which does know
+		// about them -- see TestTouchedUnitsTofuHalfMatchesTouchedRoots
+		// (internal/repo) for why this is a safe swap: for every commit
+		// shape the parity corpus covers, the two produce the identical set.
 		treeTofuUnits, err := d.Git.TreeTofuUnits(ctx, sha)
 		if err != nil {
 			d.Obs.failed(classRepo)
@@ -1090,38 +968,17 @@ func runCommitLoop(ctx context.Context, d applyDeps, last string, cc *credCache)
 		}
 		roots := tofuUnitsFor(changedFiles, treeTofuUnits)
 
-		// The plays are derived from their own tree listing, the third
-		// sibling of the same pattern -- see ansibleUnitsFor on why the
-		// three listings partition repo.TouchedUnits rather than filtering
-		// one combined set.
-		treeAnsibleUnits, err := d.Git.TreeAnsibleUnits(ctx, sha)
-		if err != nil {
-			d.Obs.failed(classRepo)
-			return last, applied, noop, passFailure{Reason: fmt.Sprintf("could not read the plays at %s: %v", sha, err), SHA: sha, Head: headSHA}, false
-		}
-		plays := ansibleUnitsFor(changedFiles, treeAnsibleUnits)
-
-		// The render units are derived from their own tree listing
-		// (gitDriver.TreeRenderUnits), the tofu half's sibling -- both read
-		// repo.TouchedUnits and neither touches repo.TouchedRoots, which
-		// stays reserved for internal/parity's comparison against the bash.
-		treeRenderUnits, err := d.Git.TreeRenderUnits(ctx, sha)
-		if err != nil {
-			return last, applied, noop, passFailure{Reason: fmt.Sprintf("could not read the render units for %s: %v", sha, err), SHA: sha, Head: headSHA}, false
-		}
-		renderUnits := renderUnitsFor(changedFiles, treeRenderUnits)
-
-		// ⚠️ plays IS COUNTED HERE, AND FORGETTING IT WAS THE WHOLE DEFECT
-		// THIS KIND EXISTS TO CLOSE. repo.KindOf classified ansible/plays/
-		// <name> as KindAnsible from the day the kind layer landed, with no
-		// executor reading it: a commit touching only ansible/plays/dev-vm/
-		// produced no roots and no render units, was logged as "touches no
-		// root", and had HEAD advanced past it -- so the machine it was
-		// meant to configure was never configured, and nothing said so.
-		// Same shape as the clusters/ and hosts/ gap above it, and the same
-		// shape as the commit-gate ordering defect before that: a kind the
-		// tree understands and the pass does not.
-		if len(roots) == 0 && len(renderUnits) == 0 && len(plays) == 0 {
+		// ⚠️ A COMMIT TOUCHING NO TOFU ROOT IS A NOOP, FULL STOP. Truss no
+		// longer manages ansible/plays/ or deliveries/: plays run on each
+		// host via ansible-pull (a platform change, not this one) and
+		// delivery is not built (Argo CD reconciles nothing this applier
+		// ever produced). So a commit that touches only those paths changes
+		// nothing truss applies, and recording it as uneventful is the
+		// correct answer rather than a gap -- see
+		// TestACommitTouchingOnlyAPlayIsANoopThatAdvancesHead and
+		// TestACommitTouchingATofuRootStillApplies for the two shapes this
+		// covers.
+		if len(roots) == 0 {
 			d.logf("noop: %s touches no root", sha)
 			if err := d.Journal.PutNoop(ctx, sha); err != nil {
 				d.Obs.ledgerError()
@@ -1169,47 +1026,6 @@ func runCommitLoop(ctx context.Context, d applyDeps, last string, cc *credCache)
 				d.Obs.rootChanged(root, *summary.ResourceChanges)
 			}
 			summaries[root] = summary
-		}
-
-		// ⚠️ PLAYS RUN AFTER EVERY ROOT AND BEFORE EVERY RENDER. The order
-		// between kinds is fixed and compiled in -- credentials, tofu,
-		// ansible, render -- and it is the natural one rather than an
-		// invented one: infrastructure makes the machine, configuration
-		// configures it, delivery ships onto it. Running a play before its
-		// root would configure a host whose cloud resources, DNS record or
-		// tailnet auth key this same commit has not created yet.
-		if len(plays) > 0 {
-			if reason := runAnsibleUnits(ctx, d, d.NewAnsible(ansibleEnv(d)), headSHA, plays); reason != "" {
-				d.Obs.failed(classApply)
-				if err := d.Journal.PutFailed(ctx, sha, reason); err != nil {
-					d.Obs.ledgerError()
-					d.Obs.failed(classLedger)
-					reason = reason + fmt.Sprintf(" (and could not record the failure: %v)", err)
-				}
-				return last, applied, noop, passFailure{Reason: reason, SHA: sha, Head: headSHA}, false
-			}
-		}
-
-		// ⚠️ RENDERS RUN AFTER EVERY ROOT AND BEFORE THE COMMIT IS RECORDED.
-		// The order between kinds is fixed -- credentials, then tofu, then
-		// render -- and it is the natural one: infrastructure makes the
-		// cluster, delivery ships onto it. Rendering first would verify
-		// manifests against a namespace or a secret that the same commit's
-		// OpenTofu has not created yet.
-		//
-		// Nothing is applied here. The applier renders, compares against
-		// what CI filed, and refuses on a mismatch; a reconciler is what
-		// actually applies the manifests, from a ref this pass advances only
-		// once every unit has passed.
-		for _, unit := range renderUnits {
-			d.logf("rendering %s at %s (head %s)", unit, sha, headSHA)
-			_, reason := renderOneUnit(ctx, d, d.NewRender(renderEnv(d)), headSHA, unit)
-			if reason != "" {
-				if err := d.Journal.PutFailed(ctx, sha, reason); err != nil {
-					reason = reason + fmt.Sprintf(" (and could not record the failure: %v)", err)
-				}
-				return last, applied, noop, passFailure{Reason: reason, SHA: sha, Head: headSHA}, false
-			}
 		}
 
 		if err := d.Journal.PutApplied(ctx, sha, summaries); err != nil {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beeradb/truss/internal/plan"
 )
@@ -66,7 +68,9 @@ func TestDeclarationsGateRefusesAProvisioner(t *testing.T) {
 	planJSON := declPlanJSON("terraform_data.evil", "terraform_data", []string{"local-exec"}, false)
 	deps, fl, tofu := declDeps(t, sha, "projects/recipes", planJSON)
 
-	result := runInvPass(t, deps, "startsha")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := runApplyPass(ctx, deps, "startsha")
 	if result.failure == "" {
 		t.Fatal("result.failure is empty, want a refusal -- the plan declares a provisioner")
 	}
@@ -94,7 +98,9 @@ func TestDeclarationsGateRefusesAProvisionerEvenWithZeroResourceChanges(t *testi
 	planJSON := declPlanJSON("terraform_data.evil", "terraform_data", []string{"local-exec"}, true)
 	deps, _, tofu := declDeps(t, sha, "projects/recipes", planJSON)
 
-	result := runInvPass(t, deps, "startsha")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := runApplyPass(ctx, deps, "startsha")
 	if result.failure == "" {
 		t.Fatal("result.failure is empty, want a refusal -- a provisioner is declared even though this plan changes nothing")
 	}
@@ -119,7 +125,9 @@ func TestDeclarationsGateAppliesACleanPlan(t *testing.T) {
 	}
 	fl.put("digests/"+sha+"/projects-recipes.digest", []byte(digest))
 
-	result := runInvPass(t, deps, "startsha")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := runApplyPass(ctx, deps, "startsha")
 	if result.failure != "" {
 		t.Fatalf("result.failure = %q, want empty -- the plan declares nothing forbidden", result.failure)
 	}
@@ -137,7 +145,9 @@ func TestDeclarationsGateRefusesTheCredentialsRootToo(t *testing.T) {
 	planJSON := declPlanJSON("terraform_data.evil", "terraform_data", []string{"local-exec"}, false)
 	deps, _, tofu := declDeps(t, sha, "credentials", planJSON)
 
-	result := runInvPass(t, deps, "startsha")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := runApplyPass(ctx, deps, "startsha")
 	if result.failure == "" {
 		t.Fatal("result.failure is empty, want a refusal -- credentials is not exempt from the declarations gate")
 	}

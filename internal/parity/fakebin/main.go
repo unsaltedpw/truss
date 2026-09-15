@@ -148,17 +148,14 @@ func git(f fixtures, args []string) int {
 	case has(args, "ls-tree"):
 		// The sha sits immediately before the "--" pathspec separator,
 		// whatever the flag count -- execGit shapes this call two
-		// different ways across four callers (TreeRoots: `-d --name-only`;
-		// TreeRenderUnits, TreeTofuUnits and TreeAnsibleUnits: `-d -r
-		// --name-only`, cmd/truss/git.go), and a fixed
+		// different ways across its two callers (TreeRoots: `-d --name-only`;
+		// TreeTofuUnits: `-d -r --name-only`, cmd/truss/git.go), and a fixed
 		// offset from "ls-tree" read the flag itself as the sha the moment a
 		// second one (`-r`) was added.
 		//
-		// ⚠️ THIS WAS WRONG FOR TreeRenderUnits TOO, AND NOTHING CAUGHT IT.
-		// The wrong "sha" missed f.Tree and fell back to the hard-coded
-		// default (platform, projects/recipes) -- which, filtered to
-		// KindRender, is empty, so no recorded scenario that only exercised
-		// render ever disagreed. Filtered to KindTofu (TreeTofuUnits) both
+		// ⚠️ THIS WAS WRONG, AND NOTHING CAUGHT IT AT FIRST. The wrong "sha"
+		// missed f.Tree and fell back to the hard-coded default (platform,
+		// projects/recipes) -- filtered to KindTofu (TreeTofuUnits) both
 		// default entries pass the filter, so the wrong answer looked like a
 		// plausible one instead of an empty one: it took a scenario whose
 		// declared tree carried a THIRD tofu root to surface it, because
@@ -181,11 +178,11 @@ func git(f fixtures, args []string) int {
 			// ⚠️ THE PATHSPEC AFTER `--` IS DELIBERATELY IGNORED, AND THAT
 			// IS SAFE ONLY BECAUSE EVERY CALLER FILTERS WITH repo.KindOf.
 			// This shim answers every ls-tree with the same listing, so
-			// TreeAnsibleUnits gets "platform" and "projects/recipes" and
-			// filters both away -- which is the right answer, since the
-			// bash this corpus records had no plays. A caller that trusted
-			// the pathspec instead of the filter would get a wrong answer
-			// here and nothing would say so.
+			// TreeRoots gets "platform" and "projects/recipes" verbatim and
+			// TreeTofuUnits filters them through KindOf, which is the right
+			// answer for every scenario this corpus records. A caller that
+			// trusted the pathspec instead of the filter would get a wrong
+			// answer here and nothing would say so.
 			roots = []string{"platform", "projects/recipes"}
 		}
 		for _, r := range roots {

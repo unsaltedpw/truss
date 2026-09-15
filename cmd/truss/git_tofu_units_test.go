@@ -12,25 +12,23 @@ import (
 )
 
 // TestExecGitTreeTofuUnitsAgainstARealRepo is the one direct test of
-// execGit.TreeTofuUnits against an actual `git` binary, the sibling of
-// TestExecGitTreeRenderUnitsAgainstARealRepo (git_render_units_test.go) for
-// the credentials/tofu half of the tree listing. Before TreeTofuUnits
-// existed, no gitDriver method could answer "what tofu units does this tree
-// contain" for clusters/<name> or hosts/<name> at all -- runCommitLoop
-// derived tofu work from repo.TouchedRoots alone, which only ever asked git
-// about "platform" and "projects/".
+// execGit.TreeTofuUnits against an actual `git` binary, for the
+// credentials/tofu half of the tree listing. Before TreeTofuUnits existed,
+// no gitDriver method could answer "what tofu units does this tree contain"
+// for clusters/<name> or hosts/<name> at all -- runCommitLoop derived tofu
+// work from repo.TouchedRoots alone, which only ever asked git about
+// "platform" and "projects/".
 //
-// ⚠️ IT RUNS THE REAL BINARY AND MUST FAIL, NEVER SKIP, IF GIT IS ABSENT. The
-// same AGENTS.md rule TestExecGitTreeRenderUnitsAgainstARealRepo's own
-// comment cites: a check nobody has watched fail is a claim, and a t.Skip on
-// a missing tool would report "passing" on a machine where this never ran.
+// ⚠️ IT RUNS THE REAL BINARY AND MUST FAIL, NEVER SKIP, IF GIT IS ABSENT: a
+// check nobody has watched fail is a claim, and a t.Skip on a missing tool
+// would report "passing" on a machine where this never ran.
 //
-// The tree mirrors the render-units test's shape, adapted for the tofu
-// prefixes: clusters/beta and hosts/h are real KindTofu units, platform and
-// projects/p round out the other two prefixes TreeTofuUnits lists, and
-// clusters/README.md is a decoy FILE directly under clusters/ -- not a
-// directory, so `-d` must already exclude it, and even if it were read it
-// names no unit (repo.KindOf requires a name after the prefix).
+// The tree exercises every prefix TreeTofuUnits lists: clusters/beta and
+// hosts/h are real KindTofu units, platform and projects/p round out the
+// other two, and clusters/README.md is a decoy FILE directly under
+// clusters/ -- not a directory, so `-d` must already exclude it, and even
+// if it were read it names no unit (repo.KindOf requires a name after the
+// prefix).
 func TestExecGitTreeTofuUnitsAgainstARealRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Fatalf("git is not on PATH: %v -- this check must fail, not skip, when its own tool is missing", err)
@@ -86,4 +84,14 @@ func TestExecGitTreeTofuUnitsAgainstARealRepo(t *testing.T) {
 			t.Fatalf("TreeTofuUnits = %v, want exactly %v", got, want)
 		}
 	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }

@@ -287,48 +287,6 @@ func CheckPlanDigest(root, headSHA, key, mine string, approved string, approvedF
 	return problems
 }
 
-// CheckRenderDigest refuses a delivery unit whose rendered manifests do not
-// hash to the bytes CI filed for the approved commit.
-//
-// It is the delivery half of CheckPlanDigest and it is deliberately NOT the
-// same function, because the two gates prove different things and a shared
-// message would say the wrong one.
-//
-// ⚠️ THERE IS NO EXEMPTION HERE, AND THERE MUST NEVER BE ONE. CheckPlanDigest
-// exempts the credentials root because CI genuinely cannot plan it -- reading
-// that root's state means reading the tokens, so there is nothing to compare
-// against and the exemption is a fact about the world rather than a
-// convenience. docs/port-plan.md calls that "the single hole in every apply
-// is gated". Rendering has no such fact: it needs no state, no credentials
-// and no network, so any unit CI could not render is a unit that will not
-// render for the applier either -- which is a refusal, not a pass. A
-// per-kind exemption would turn one hole into as many holes as there are
-// kinds. TestCheckRenderDigestExemptsNothing pins it.
-//
-// ⚠️ THE MISMATCH SENTENCE IS NOT "THE WORLD MOVED", AND THE DIFFERENCE IS
-// THE WHOLE DIAGNOSIS. A plan is a function of the tree AND the live
-// infrastructure, so when two plans of one commit disagree the honest reading
-// is that something changed underneath between review and apply. A render is
-// a function of the tree ALONE -- offline, no providers, no API -- so the
-// world cannot be what moved. A render mismatch means exactly one of: the two
-// sides ran different renderer versions, the unit has a non-deterministic
-// input, or the tree is not the tree that was reviewed. Telling an operator
-// "the world moved" would send them to look at their infrastructure for a
-// fault that is in their repository.
-func CheckRenderDigest(unit, headSHA, key, mine string, approved string, approvedFound bool) []string {
-	var problems []string
-	if !approvedFound || approved == "" {
-		problems = append(problems,
-			fmt.Sprintf("no approved render recorded for %s at %s (%s): refusing to deliver a manifest nobody reviewed", unit, short(headSHA), key))
-		return problems
-	}
-	if mine != approved {
-		problems = append(problems,
-			fmt.Sprintf("the render for %s does not match the one approved at %s (approved %s, ours %s): the tree and the render disagree", unit, short(headSHA), approved, mine))
-	}
-	return problems
-}
-
 func isTrue(b *bool) bool { return b != nil && *b }
 
 func contains(hay []string, needle string) bool {

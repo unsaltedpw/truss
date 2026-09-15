@@ -84,31 +84,12 @@ type passObs struct {
 	logEvents     map[string]int
 	ledgerErrors  int
 
-	// renderUnits and renderRefusals are the delivery side of digestChecks/
-	// digestRefused above -- the same "did the gate run and agree" question,
-	// asked of a rendered manifest instead of a tofu plan. Kept as separate
-	// fields rather than folded into the digest ones because they gate
-	// different artefacts: a bad manifest and a bad plan want different
-	// people, and one counter could not tell a caller which broke.
-	renderUnits    int
-	renderRefusals int
-
 	rotationRan     bool
 	rotationOK      bool
 	publishAttempt  bool
 	publishOK       bool
 	publishExpiries int
 	driftRan        bool
-
-	// deliveryPublished and deliveryRefUnprotected describe publishDeliveryRef's
-	// one outcome. Both default false, which is correct for every path that
-	// is not an actual publish: a tree with no delivery units, a forge or
-	// push error, or a pass that never called it at all. Only the specific
-	// "no ruleset protects the ref" gate failure sets the second one -- see
-	// deliveryRefIsUnprotected's own comment for why that distinction is the
-	// whole reason the field exists.
-	deliveryPublished      bool
-	deliveryRefUnprotected bool
 }
 
 func newPassObs() *passObs {
@@ -189,22 +170,6 @@ func (o *passObs) logged(level string) {
 	o.logEvents[level]++
 }
 
-// rendered records that this pass built one delivery unit and compared its
-// bytes against the digest CI filed -- called once per unit that actually
-// reached that comparison. A unit the tree no longer has is a prune
-// (renderOneUnit returns before this is ever called for it), not a render,
-// and must not count here the way a root skipped for lack of a plan does not
-// count toward digestChecked.
-func (o *passObs) rendered(refused bool) {
-	if o == nil {
-		return
-	}
-	o.renderUnits++
-	if refused {
-		o.renderRefusals++
-	}
-}
-
 // The remaining recorders. ⚠️ THESE ARE METHODS AND NOT FIELD ASSIGNMENTS
 // FOR ONE REASON: a nil-safe recorder is only nil-safe through its methods,
 // and `d.Obs.publishOK = true` in runHandoff panicked every test that drove
@@ -236,34 +201,6 @@ func (o *passObs) contended() {
 		return
 	}
 	o.lockContended = true
-}
-
-// delivered records whether this pass fast-forwarded the delivery ref.
-// False covers every path that is not a successful publish -- a refusal, a
-// forge or push error, and a tree with no delivery units at all -- because
-// publishDeliveryRef's own doc says the last of those must never be read as
-// the ref being broken.
-func (o *passObs) delivered(ok bool) {
-	if o == nil {
-		return
-	}
-	o.deliveryPublished = ok
-}
-
-// deliveryRefIsUnprotected records the one gate failure that means gated
-// commits are piling up with no cluster receiving them: the rulesets on the
-// delivery ref do not add up to a gated path to production. Since 2026-09-14
-// that covers four causes, not two -- no ruleset applies, a rule is missing
-// (non_fast_forward, deletion, or the update rule that restricts the pusher),
-// the bypass list names an actor other than the applier's own App, or the list
-// could not be read at all. It is never called for a tree with no delivery
-// units -- "this deployment does not use delivery" and "delivery is broken"
-// are different facts, and this metric exists to alarm only on the second.
-func (o *passObs) deliveryRefIsUnprotected() {
-	if o == nil {
-		return
-	}
-	o.deliveryRefUnprotected = true
 }
 
 func (o *passObs) drifting() {
@@ -404,21 +341,6 @@ func passMetrics(finished time.Time, duration time.Duration, driftRun bool, rep 
 			Help:    "Roots refused this pass because the plan did not hash to the approved one. Any value above zero is the gate doing the job it exists for.",
 			Samples: []metrics.Sample{{Value: float64(o.digestRefused)}},
 		},
-		metrics.Family{
-			Name:    "truss_render_units",
-			Help:    "Delivery units this pass rendered and compared against the digest CI filed.",
-			Samples: []metrics.Sample{{Value: float64(o.renderUnits)}},
-		},
-		metrics.Family{
-			// ⚠️ NOT truss_digest_refusals. That series is the OpenTofu plan
-			// gate; this one is the rendered-manifest gate, over a different
-			// artefact CI files a different digest for. Folding them together
-			// would leave a dashboard unable to tell a bad manifest from a bad
-			// plan -- the same reason the failure classes are never collapsed.
-			Name:    "truss_render_refusals",
-			Help:    "Renders this pass refused because the rendered bytes did not hash to the digest CI filed for that unit. Distinct from truss_digest_refusals, which is the OpenTofu plan gate over a different artefact.",
-			Samples: []metrics.Sample{{Value: float64(o.renderRefusals)}},
-		},
 	)
 
 	if len(o.rootSeconds) > 0 {
@@ -491,21 +413,6 @@ func passMetrics(finished time.Time, duration time.Duration, driftRun bool, rep 
 			Name:    "truss_publish_expiries",
 			Help:    "Expiry dates the publisher recorded on the value it wrote.",
 			Samples: []metrics.Sample{{Value: float64(o.publishExpiries)}},
-		},
-		metrics.Family{
-			Name:    "truss_delivery_published",
-			Help:    "1 when this pass fast-forwarded the delivery ref to the commit it just gated. 0 covers a refusal, a forge or push error, and a tree with no delivery units at all -- see truss_delivery_ref_unprotected for the one of those that matters.",
-			Samples: []metrics.Sample{{Value: one(o.deliveryPublished)}},
-		},
-		metrics.Family{
-			// ⚠️ THIS IS THE ONE THAT MATTERS: gated commits keep applying and
-			// nothing is telling a reconciler about any of them. Never 1 for a
-			// tree with no delivery units -- deliveryRefIsUnprotected's own
-			// comment says why conflating the two would be the wrong alarm for
-			// somebody who never asked for the feature.
-			Name:    "truss_delivery_ref_unprotected",
-			Help:    "1 when this pass refused to publish because the rulesets on the delivery ref do not make it a gated path to production: none applies, one lacks non_fast_forward, deletion or update, its bypass list names an actor other than the applier's own App, or that list could not be read. Never 1 for a tree with no delivery units -- that is a different fact from delivery being broken.",
-			Samples: []metrics.Sample{{Value: one(o.deliveryRefUnprotected)}},
 		},
 	)
 

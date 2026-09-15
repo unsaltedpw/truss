@@ -23,16 +23,8 @@ import (
 // ("a binary on my computer I can use to inspect the queue and unstick
 // things"), over the same ledger machinery §4.9's rows already built.
 //
-// `render-digest` and `inventory` post-date §4.9 too: the CI side of the
-// render digest gate, and the inventory consistency check. `inventory`
-// collapses `inventory validate` to one top-level verb, the same way
-// `ledger` and `gate` already collapse `ledger get`/`ledger put` and `gate
-// protection`/`gate commit`.
-//
 // `units` post-dates all of the above: it prints the units a commit touches
-// so CI and the applier derive the set from one implementation, closing
-// docs/work-items.md's "The two sides of the render digest do not share a
-// derivation".
+// so CI and the applier derive the set from one implementation.
 func TestSubcommandsAreExactlyTheDocumentedSet(t *testing.T) {
 	want := []string{
 		"ledger",
@@ -46,8 +38,6 @@ func TestSubcommandsAreExactlyTheDocumentedSet(t *testing.T) {
 		"status",
 		"why",
 		"skip",
-		"render-digest",
-		"inventory",
 		"units",
 	}
 	if !reflect.DeepEqual(subcommands, want) {

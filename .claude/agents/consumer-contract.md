@@ -27,9 +27,9 @@ Read the change (`git diff main...HEAD`, or the range given) and look for:
   keys, object paths, status-check contexts, service-account audiences. A
   renamed variable is a crash on the consumer's next tick, and the rename looks
   local here.
-- **The toolchain pins.** `tofu-versions`, `kustomize-version`,
-  `ansible-version`. A plan digest is computed by two different binaries on two
-  sides; a version added, dropped or bumped decides whether they agree.
+- **The toolchain pins.** `tofu-versions`. A plan digest is computed by two
+  different binaries on two sides; a version added, dropped or bumped
+  decides whether they agree.
 - **A new refusal an existing, compliant deployment cannot satisfy.** The worst
   shape this repository has shipped: v0.1.8 compared a tailnet device's
   fully-qualified name against bare inventory record names and refused every

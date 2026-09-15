@@ -12,9 +12,9 @@ import (
 // commitFiles writes files (relative path -> content, creating parent
 // directories as needed) into dir, stages everything and commits, returning
 // the new commit's sha. It builds a real git history the way
-// git_render_units_test.go's TestExecGitTreeRenderUnitsAgainstARealRepo
-// already does, and reuses that file's runGit helper rather than defining a
-// second one in the same package.
+// git_tofu_units_test.go's TestExecGitTreeTofuUnitsAgainstARealRepo already
+// does, and reuses that file's runGit helper rather than defining a second
+// one in the same package.
 //
 // ⚠️ A FIXED IDENTITY WITH NO @, NOT WHATEVER THE MACHINE HAS CONFIGURED.
 // AGENTS.md's own rule is that a test must not depend on the machine running
@@ -49,15 +49,17 @@ func commitFiles(t *testing.T, dir string, files map[string]string, msg string) 
 // every case this file covers, so every sub-test shares one tree instead of
 // each reconstructing its own.
 //
-//   - base:   a pre-existing render unit (baselines/prod), so later commits
+//   - base:   a pre-existing tofu unit (clusters/beta), so later commits
 //     have a tree that already contains something besides what they change.
-//   - mixed:  adds one project root (tofu), one ansible play, and one
-//     delivery (render) in a single commit -- the ordinary, non-shared case.
-//   - shared: touches only inventory/x.json, a shared input. The tree at
-//     this commit still holds both render units (baselines/prod and
-//     deliveries/prod/web), which is the asymmetry the whole command exists
-//     to fix: CI must be told about both, not just the ones this commit's
-//     diff names.
+//   - mixed:  adds one project root and one host root (both tofu) and
+//     touches credentials in the same commit -- the ordinary, non-shared
+//     case, and it exercises TouchedUnits' fixed kind-then-path order
+//     (credentials before tofu, hosts/h before projects/foo).
+//   - shared: touches only modules/vpc/main.tf, a shared input. The tree at
+//     this commit still holds both tofu units (clusters/beta and
+//     projects/foo), which is the asymmetry the whole command exists to
+//     fix: CI must be told about both, not just the ones this commit's diff
+//     names.
 //   - docsOnly: touches only docs/, no unit at all.
 func unitsFixture(t *testing.T) (dir string, base, mixed, shared, docsOnly string) {
 	t.Helper()
@@ -65,18 +67,18 @@ func unitsFixture(t *testing.T) (dir string, base, mixed, shared, docsOnly strin
 	runGit(t, dir, "init", "--quiet")
 
 	base = commitFiles(t, dir, map[string]string{
-		"baselines/prod/kustomization.yaml": "kind: Kustomization\n",
-		"README.md":                         "root\n",
+		"clusters/beta/main.tf": "# a cluster root\n",
+		"README.md":             "root\n",
 	}, "base")
 
 	mixed = commitFiles(t, dir, map[string]string{
-		"projects/foo/main.tf":                   "# a project root\n",
-		"ansible/plays/bar/playbook.yml":         "- hosts: all\n",
-		"deliveries/prod/web/kustomization.yaml": "kind: Kustomization\n",
+		"projects/foo/main.tf": "# a project root\n",
+		"hosts/h/main.tf":      "# a host root\n",
+		"credentials/aws.tf":   "# credentials\n",
 	}, "mixed")
 
 	shared = commitFiles(t, dir, map[string]string{
-		"inventory/x.json": `{"schema":"truss.host/v1"}`,
+		"modules/vpc/main.tf": "# a shared module\n",
 	}, "shared input")
 
 	docsOnly = commitFiles(t, dir, map[string]string{
@@ -86,12 +88,12 @@ func unitsFixture(t *testing.T) (dir string, base, mixed, shared, docsOnly strin
 	return dir, base, mixed, shared, docsOnly
 }
 
-// TestUnitsMixedCommitReturnsAllThreeKindsInOrder covers the ordinary,
-// non-shared-input path: a commit touching one project root, one ansible
-// play and one delivery must report all three, in repo.TouchedUnits' fixed
-// kind order (tofu, then ansible, then render) -- never alphabetically,
-// which is what the deliberate-break step below proves by breaking it.
-func TestUnitsMixedCommitReturnsAllThreeKindsInOrder(t *testing.T) {
+// TestUnitsMixedCommitReturnsAllKindsInOrder covers the ordinary,
+// non-shared-input path: a commit touching credentials and one project root
+// must report both, in repo.TouchedUnits' fixed kind order (credentials,
+// then tofu) -- never alphabetically, which is what the deliberate-break
+// step below proves by breaking it.
+func TestUnitsMixedCommitReturnsAllKindsInOrder(t *testing.T) {
 	dir, _, mixed, _, _ := unitsFixture(t)
 
 	var stdout, stderr bytes.Buffer
@@ -100,40 +102,39 @@ func TestUnitsMixedCommitReturnsAllThreeKindsInOrder(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr.String())
 	}
 
-	want := "tofu\tprojects/foo\n" +
-		"ansible\tansible/plays/bar\n" +
-		"render\tdeliveries/prod/web\n"
+	want := "credentials\tcredentials\n" +
+		"tofu\thosts/h\n" +
+		"tofu\tprojects/foo\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout =\n%q\nwant\n%q", stdout.String(), want)
 	}
 }
 
-// TestUnitsKindFilterRestrictsToRenderOnly checks --kind render, the filter
-// a consumer's render-digest CI step will actually use.
-func TestUnitsKindFilterRestrictsToRenderOnly(t *testing.T) {
+// TestUnitsKindFilterRestrictsToCredentialsOnly checks --kind credentials.
+func TestUnitsKindFilterRestrictsToCredentialsOnly(t *testing.T) {
 	dir, _, mixed, _, _ := unitsFixture(t)
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"units", mixed, "--dir", dir, "--kind", "render"}, strings.NewReader(""), &stdout, &stderr)
+	code := run([]string{"units", mixed, "--dir", dir, "--kind", "credentials"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr.String())
 	}
 
-	want := "render\tdeliveries/prod/web\n"
+	want := "credentials\tcredentials\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 
-// TestUnitsSharedInputReturnsEveryRenderUnitInTheTree is the case that
-// motivated the command. inventory/x.json is a shared input
+// TestUnitsSharedInputReturnsEveryTofuUnitInTheTree is the case that
+// motivated the command. modules/vpc/main.tf is a shared input
 // (internal/repo/units.go's unitSharedInput), so the commit that only
-// touches it must report every render unit that exists in the tree --
-// baselines/prod (present since the base commit, untouched by this diff)
-// and deliveries/prod/web (added by the previous commit) -- not only units
-// this commit's own diff names. Without this case the command cannot be
-// shown to close the asymmetry docs/work-items.md describes.
-func TestUnitsSharedInputReturnsEveryRenderUnitInTheTree(t *testing.T) {
+// touches it must report every tofu unit that exists in the tree --
+// clusters/beta (present since the base commit, untouched by this diff)
+// and hosts/h and projects/foo (added by the previous commit) -- not only
+// units this commit's own diff names. Without this case the command cannot
+// be shown to close the asymmetry a widened selection depends on.
+func TestUnitsSharedInputReturnsEveryTofuUnitInTheTree(t *testing.T) {
 	dir, _, _, shared, _ := unitsFixture(t)
 
 	var stdout, stderr bytes.Buffer
@@ -142,10 +143,11 @@ func TestUnitsSharedInputReturnsEveryRenderUnitInTheTree(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr.String())
 	}
 
-	want := "render\tbaselines/prod\n" +
-		"render\tdeliveries/prod/web\n"
+	want := "tofu\tclusters/beta\n" +
+		"tofu\thosts/h\n" +
+		"tofu\tprojects/foo\n"
 	if stdout.String() != want {
-		t.Fatalf("stdout =\n%q\nwant\n%q (every render unit in the tree, not just the ones this commit's diff names)", stdout.String(), want)
+		t.Fatalf("stdout =\n%q\nwant\n%q (every tofu unit in the tree, not just the ones this commit's diff names)", stdout.String(), want)
 	}
 }
 

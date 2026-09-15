@@ -27,8 +27,8 @@ import (
 //
 //  1. Is it applied? -- the ledger record, if one exists.
 //  2. Where is the queue relative to it? -- ledger HEAD, and ahead/at/behind.
-//  3. Which units does it select? -- tofu roots, ansible plays, render
-//     units, derived the same way the apply pass derives them.
+//  3. Which units does it select? -- tofu roots, derived the same way the
+//     apply pass derives them.
 //  4. Is there an approved plan digest for it, per root?
 //
 // ⚠️ READ-ONLY, AND THAT IS THE WHOLE POINT OF A COMMAND MEANT TO BE SAFE TO
@@ -89,10 +89,10 @@ func cmdWhy(ctx context.Context, args []string, getenv func(string) string, stdo
 	printQueuePosition(ctx, sha, journal, g, stdout, stderr)
 
 	fmt.Fprintln(stdout)
-	roots, renders, unitsErr := printUnitsSelected(ctx, sha, g, stdout)
+	roots, unitsErr := printUnitsSelected(ctx, sha, g, stdout)
 
 	fmt.Fprintln(stdout)
-	printApprovedDigests(ctx, sha, cfg, getenv, journal, roots, renders, unitsErr, stdout)
+	printApprovedDigests(ctx, sha, cfg, getenv, journal, roots, unitsErr, stdout)
 
 	return exitCode
 }
@@ -301,70 +301,49 @@ func printQueuePosition(ctx context.Context, sha string, journal *ledger.Journal
 }
 
 // printUnitsSelected answers §3: which units does this commit select? --
-// the tofu roots, ansible plays and render units, derived by feeding the
-// SAME changed-files diff and the SAME three tree listings runCommitLoop
-// reads (apply_cmd.go) through the SAME three functions that partition one
-// repo.TouchedUnits call by kind: tofuUnitsFor, ansibleUnitsFor,
-// renderUnitsFor. There is no second derivation here to drift from the
-// pass's own -- see those three functions' own docs for why each reads its
-// own tree listing rather than a combined one.
+// the tofu roots, derived by feeding the SAME changed-files diff and the
+// SAME tree listing runCommitLoop reads (apply_cmd.go) through the SAME
+// function, tofuUnitsFor. There is no second derivation here to drift from
+// the pass's own -- see that function's own doc for why it reads its own
+// tree listing rather than a combined one.
 //
 // It names the unitSharedInput effect explicitly when it fires: a commit
-// touching only inventory/x.json selects every unit that exists in the
-// tree, not just the ones whose own files changed, and that is a surprise
-// worth a reader being told rather than left to notice from an unusually
-// long list.
+// touching only modules/foo.tf selects every unit that exists in the tree,
+// not just the ones whose own files changed, and that is a surprise worth
+// a reader being told rather than left to notice from an unusually long
+// list.
 //
-// Returns the tofu-and-credentials roots and the render units so §4 can ask
-// about their digests without re-deriving them, and the error from whichever
-// git read failed first (nil when all three tree listings and the diff were
-// read).
-func printUnitsSelected(ctx context.Context, sha string, g gitDriver, stdout io.Writer) (roots, renders []string, err error) {
+// Returns the tofu-and-credentials roots so §4 can ask about their digests
+// without re-deriving them, and the error from whichever git read failed
+// first (nil when both the tree listing and the diff were read).
+func printUnitsSelected(ctx context.Context, sha string, g gitDriver, stdout io.Writer) (roots []string, err error) {
 	changedFiles, err := g.ChangedFiles(ctx, sha)
 	if err != nil {
 		fmt.Fprintf(stdout, "units: unknown -- could not read changed files for %s: %v\n", sha, err)
-		return nil, nil, err
+		return nil, err
 	}
 	treeTofu, err := g.TreeTofuUnits(ctx, sha)
 	if err != nil {
 		fmt.Fprintf(stdout, "units: unknown -- could not read the tofu units at %s: %v\n", sha, err)
-		return nil, nil, err
-	}
-	treeAnsible, err := g.TreeAnsibleUnits(ctx, sha)
-	if err != nil {
-		fmt.Fprintf(stdout, "units: unknown -- could not read the plays at %s: %v\n", sha, err)
-		return nil, nil, err
-	}
-	treeRender, err := g.TreeRenderUnits(ctx, sha)
-	if err != nil {
-		fmt.Fprintf(stdout, "units: unknown -- could not read the render units at %s: %v\n", sha, err)
-		return nil, nil, err
+		return nil, err
 	}
 
 	roots = tofuUnitsFor(changedFiles, treeTofu)
-	plays := ansibleUnitsFor(changedFiles, treeAnsible)
-	renders = renderUnitsFor(changedFiles, treeRender)
 
 	if repo.SharedInputTouched(changedFiles) {
-		fmt.Fprintln(stdout, "units: this commit touches a shared input (modules/, inventory/, providers.allow, .opentofu-version, .kustomize-version or .ansible-version) -- EVERY unit that exists in this commit's own tree is selected, not only the ones whose files changed")
+		fmt.Fprintln(stdout, "units: this commit touches a shared input (modules/, providers.allow or .opentofu-version) -- EVERY unit that exists in this commit's own tree is selected, not only the ones whose files changed")
 	} else {
 		fmt.Fprintln(stdout, "units:")
 	}
 
-	if len(roots) == 0 && len(plays) == 0 && len(renders) == 0 {
+	if len(roots) == 0 {
 		fmt.Fprintln(stdout, "  none -- this commit is a noop")
-		return roots, renders, nil
+		return roots, nil
 	}
 	for _, r := range roots {
 		fmt.Fprintf(stdout, "  tofu:    %s\n", r)
 	}
-	for _, p := range plays {
-		fmt.Fprintf(stdout, "  ansible: %s\n", p)
-	}
-	for _, r := range renders {
-		fmt.Fprintf(stdout, "  render:  %s\n", r)
-	}
-	return roots, renders, nil
+	return roots, nil
 }
 
 // printApprovedDigests answers §4: is there an approved plan digest for
@@ -380,10 +359,8 @@ func printUnitsSelected(ctx context.Context, sha string, g gitDriver, stdout io.
 // regardless of what is filed.
 //
 // credentials is named present-or-absent from nothing: §2 item 10 exempts
-// it from the digest gate entirely, because CI never plans that root. Plays
-// have no digest concept at all (repo.Kind's own doc on KindAnsible) and are
-// not listed here -- there is nothing to have approved.
-func printApprovedDigests(ctx context.Context, sha string, cfg config.Config, getenv func(string) string, journal *ledger.Journal, roots, renders []string, unitsErr error, stdout io.Writer) {
+// it from the digest gate entirely, because CI never plans that root.
+func printApprovedDigests(ctx context.Context, sha string, cfg config.Config, getenv func(string) string, journal *ledger.Journal, roots []string, unitsErr error, stdout io.Writer) {
 	if unitsErr != nil {
 		fmt.Fprintln(stdout, "digests: unknown -- the units this commit selects could not be determined (see above)")
 		return
@@ -398,8 +375,8 @@ func printApprovedDigests(ctx context.Context, sha string, cfg config.Config, ge
 		}
 		tofuRoots = append(tofuRoots, r)
 	}
-	if len(tofuRoots) == 0 && len(renders) == 0 && !credentialsTouched {
-		fmt.Fprintln(stdout, "digests: n/a -- this commit selects no tofu root and no render unit")
+	if len(tofuRoots) == 0 && !credentialsTouched {
+		fmt.Fprintln(stdout, "digests: n/a -- this commit selects no tofu root")
 		return
 	}
 
@@ -424,9 +401,6 @@ func printApprovedDigests(ctx context.Context, sha string, cfg config.Config, ge
 	}
 	for _, r := range tofuRoots {
 		printOneDigest(ctx, journal, headSHA, r, "", stdout)
-	}
-	for _, u := range renders {
-		printOneDigest(ctx, journal, headSHA, u, "render ", stdout)
 	}
 }
 

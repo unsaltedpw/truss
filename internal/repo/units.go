@@ -6,15 +6,15 @@ import (
 )
 
 // Kind is what a directory IS, and therefore how the applier treats it: what
-// binary renders or plans it, what evidence the reviewer read, and what a
-// refusal means.
+// binary plans it, what evidence the reviewer read, and what a refusal
+// means.
 //
 // ⚠️ A KIND IS DETECTED FROM THE TREE AND NEVER FROM CONFIGURATION. The
 // alternative -- a marker file in each directory declaring its own kind --
 // is the flexible design and it is the wrong one, because it moves the
 // decision "what will be executed, and with which credentials" out of the
-// engine and into the tree being changed. "This directory is an Ansible play
-// that runs as root on every managed host" is not a deployment value.
+// engine and into the tree being changed. "This directory holds a script
+// that runs as root on the applier's own node" is not a deployment value.
 // docs/port-plan.md draws that line as engine versus deployment values, and
 // TestUnitKindsAreCompiledIn pins it.
 type Kind int
@@ -23,15 +23,11 @@ const (
 	// KindCredentials is the one root whose state holds token values. It
 	// runs first and it is the only digest-gate exemption in the system.
 	KindCredentials Kind = iota
-	// KindTofu is an OpenTofu root: planned, digest-gated, applied.
+	// KindTofu is an OpenTofu root: planned, digest-gated, applied. This
+	// covers "platform", every projects/<name>, clusters/<name> and
+	// hosts/<name> -- clusters and hosts are tofu roots that provision the
+	// machine, not a configuration or delivery layer on top of it.
 	KindTofu
-	// KindAnsible configures machines. It has no plan digest -- CI cannot
-	// reach the hosts, so anything CI filed would be a function of the
-	// commit alone, which is a check that cannot fail.
-	KindAnsible
-	// KindRender is a Kustomize directory. The applier renders it and
-	// compares bytes; a reconciler applies it.
-	KindRender
 )
 
 func (k Kind) String() string {
@@ -40,10 +36,6 @@ func (k Kind) String() string {
 		return "credentials"
 	case KindTofu:
 		return "tofu"
-	case KindAnsible:
-		return "ansible"
-	case KindRender:
-		return "render"
 	}
 	return "unknown"
 }
@@ -55,73 +47,41 @@ type Unit struct {
 }
 
 // The unit patterns, all anchored at the start of the path for the reason
-// sharedInput already gives: a commit touching "docs/deliveries/README.md"
-// must not be read as touching a delivery.
+// sharedInput already gives: a commit touching "docs/clusters/README.md"
+// must not be read as touching a cluster.
 // ⚠️ EVERY PATTERN REQUIRES A TRAILING SLASH, WHICH IS WHAT MAKES IT MATCH A
 // DIRECTORY RATHER THAN A NAME. An earlier draft ended them with `(/|$)` so
 // that one pattern could serve both a changed file and a bare unit path, and
-// it read the FILE "deliveries/beta/kustomization.yaml" as a unit called
-// "kustomization.yaml" on cluster beta -- and "clusters/README.md" as a
-// cluster root named README.md. Caught by TestADeliveryNeedsBothSegments
-// before it shipped.
+// it read the FILE "clusters/README.md" as a cluster root named README.md.
+// Caught before it shipped.
 //
 // KindOf appends the slash instead, which is the idiom projectPath already
 // uses (roots.go:19, matched against path+"/"). One shape, two callers.
 var (
-	clusterUnit  = regexp.MustCompile(`^clusters/([^/]+)/`)
-	hostUnit     = regexp.MustCompile(`^hosts/([^/]+)/`)
-	ansibleUnit  = regexp.MustCompile(`^ansible/plays/([^/]+)/`)
-	baselineUnit = regexp.MustCompile(`^baselines/([^/]+)/`)
-	deliveryUnit = regexp.MustCompile(`^deliveries/([^/]+)/([^/]+)/`)
+	clusterUnit = regexp.MustCompile(`^clusters/([^/]+)/`)
+	hostUnit    = regexp.MustCompile(`^hosts/([^/]+)/`)
 )
 
 // The same prefixes, anchored, for the OTHER question. The patterns above
-// answer "which unit owns this file", where a prefix is right: a file at
-// ansible/plays/<p>/group_vars/all.yml belongs to <p>. These answer "is this
-// path itself a unit", where a prefix is WRONG, and the difference wedged the
-// applier on 2026-09-12.
-//
-// ⚠️ KindOf USED TO ASK THE FIRST QUESTION AND ACT ON THE ANSWER TO THE
-// SECOND. It matched path+"/" against the prefixes, so every directory nested
-// inside a unit answered yes. TreeAnsibleUnits lists with `ls-tree -d -r`, so
-// ansible/plays/<p>/group_vars -- Ansible's own standard layout -- arrived as
-// a play of its own, with no site.yml and no host declaring it. The target
-// gate then refused EVERY play in the pass, every five minutes, and the fleet
-// stopped. internal/ansible/ansible.go already said a play is a directory
-// containing site.yml; nothing made unit selection agree with it.
-//
-// ⚠️ TWO SHAPES OF ONE PREFIX IS NOT TWO COPIES OF ONE FACT. They are two
-// questions. Collapsing them by anchoring the patterns above would fix
-// classification and silently break selection: a commit touching only a
-// play's group_vars would then select no play at all -- absent read as
-// compliant, which is quieter and worse than the wedge it replaced.
-// TestAFileInAUnitsSubdirectoryStillSelectsThatUnit exists to refuse that fix.
+// answer "which unit owns this file", where a prefix is right. These answer
+// "is this path itself a unit", where a prefix is WRONG -- a directory
+// nested inside a unit must not itself read as a second unit.
 var (
-	clusterUnitExact  = regexp.MustCompile(`^clusters/[^/]+$`)
-	hostUnitExact     = regexp.MustCompile(`^hosts/[^/]+$`)
-	projectUnitExact  = regexp.MustCompile(`^projects/[^/]+$`)
-	ansibleUnitExact  = regexp.MustCompile(`^ansible/plays/[^/]+$`)
-	baselineUnitExact = regexp.MustCompile(`^baselines/[^/]+$`)
-	deliveryUnitExact = regexp.MustCompile(`^deliveries/[^/]+/[^/]+$`)
+	clusterUnitExact = regexp.MustCompile(`^clusters/[^/]+$`)
+	hostUnitExact    = regexp.MustCompile(`^hosts/[^/]+$`)
+	projectUnitExact = regexp.MustCompile(`^projects/[^/]+$`)
 )
 
 // unitSharedInput is a path that is an input to EVERY unit.
 //
-// ⚠️ IT IS DELIBERATELY NOT sharedInput, EVEN THOUGH IT CONTAINS IT.
-// TouchedRoots reproduces derive_touched_roots byte for byte and the parity
-// corpus compares against recordings of the bash; widening the pattern it
-// reads would change what that function returns for commits the corpus
-// already has answers for. So the unit layer gets its own, and TouchedRoots
-// keeps its exact body.
-//
-// inventory/ is here because its readers are not derivable from its path:
-// inventory/clusters/beta.json is read by clusters/beta, by every delivery
-// on beta, and by every environment placed there. Narrowing this to the
-// units a given file "belongs to" is the tempting optimisation and it is
-// wrong the first time a file has two readers -- the failure mode is a host
-// whose play never re-ran after its own inventory entry changed, which is
-// absent read as compliant.
-var unitSharedInput = regexp.MustCompile(`^(modules/|inventory/|providers\.allow$|\.opentofu-version$|\.kustomize-version$|\.ansible-version$)`)
+// ⚠️ IT IS DELIBERATELY NOT sharedInput, EVEN THOUGH TODAY THE TWO PATTERNS
+// COINCIDE. TouchedRoots reproduces derive_touched_roots byte for byte and
+// the parity corpus compares against recordings of the bash; widening the
+// pattern it reads would change what that function returns for commits the
+// corpus already has answers for. So the unit layer keeps its own, and
+// TouchedRoots keeps its exact body -- the two are free to diverge again the
+// moment either side needs to.
+var unitSharedInput = regexp.MustCompile(`^(modules/|providers\.allow$|\.opentofu-version$)`)
 
 // SharedInputTouched reports whether changedFiles includes a shared input --
 // the same test TouchedUnits makes internally (the `shared` loop above) to
@@ -131,9 +91,9 @@ var unitSharedInput = regexp.MustCompile(`^(modules/|inventory/|providers\.allow
 // It exists for a caller that already knows it is about to call
 // TouchedUnits and needs to explain a WIDENED result to a reader -- `truss
 // why` (docs/work-items.md:86-133) names this explicitly, because a commit
-// touching only inventory/x.json selecting every tofu root in the
-// repository is a surprise worth stating, not one to leave a reader to
-// infer from an unusually long unit list. Re-deriving the test with a
+// touching only modules/foo.tf selecting every tofu root in the repository
+// is a surprise worth stating, not one to leave a reader to infer from an
+// unusually long unit list. Re-deriving the test with a
 // second copy of unitSharedInput would be the two-copies-of-one-fact
 // mistake AGENTS.md already warns against; this reads the same regex
 // TouchedUnits itself is built on, so the two can never disagree about what
@@ -160,10 +120,6 @@ func KindOf(path string) (Kind, bool) {
 		return KindTofu, true
 	case clusterUnitExact.MatchString(path), hostUnitExact.MatchString(path):
 		return KindTofu, true
-	case ansibleUnitExact.MatchString(path):
-		return KindAnsible, true
-	case baselineUnitExact.MatchString(path), deliveryUnitExact.MatchString(path):
-		return KindRender, true
 	}
 	return 0, false
 }
@@ -171,15 +127,13 @@ func KindOf(path string) (Kind, bool) {
 // TouchedUnits derives every unit a commit touches, in the order the applier
 // must act on them.
 //
-// The order is by kind, then by path: credentials, then tofu, then ansible,
-// then render. That is a TOTAL ORDER BETWEEN KINDS and not a dependency
-// graph, and the distinction matters -- docs/work-items.md refuses declared
-// edges between roots on the grounds that the current failure mode is safe
-// and edges would let a mis-ordered apply succeed instead of refuse. Nothing
-// here lets that happen: the sequence is fixed, compiled in, and identical
-// for every commit. It is also the natural order rather than an invented
-// one -- infrastructure makes the machine, configuration configures it,
-// delivery ships onto it.
+// The order is by kind, then by path: credentials, then tofu. That is a
+// TOTAL ORDER BETWEEN KINDS and not a dependency graph, and the distinction
+// matters -- docs/work-items.md refuses declared edges between roots on the
+// grounds that the current failure mode is safe and edges would let a
+// mis-ordered apply succeed instead of refuse. Nothing here lets that
+// happen: the sequence is fixed, compiled in, and identical for every
+// commit.
 //
 // treeUnits is every unit present in the commit's own tree, supplied by
 // whatever read the tree; this function does no filesystem or git I/O of its
@@ -225,15 +179,6 @@ func TouchedUnits(changedFiles, treeUnits []string) []Unit {
 		}
 		if m := hostUnit.FindStringSubmatch(f); m != nil {
 			paths["hosts/"+m[1]] = true
-		}
-		if m := ansibleUnit.FindStringSubmatch(f); m != nil {
-			paths["ansible/plays/"+m[1]] = true
-		}
-		if m := baselineUnit.FindStringSubmatch(f); m != nil {
-			paths["baselines/"+m[1]] = true
-		}
-		if m := deliveryUnit.FindStringSubmatch(f); m != nil {
-			paths["deliveries/"+m[1]+"/"+m[2]] = true
 		}
 	}
 	return sortUnits(paths)
