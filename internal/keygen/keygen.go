@@ -65,11 +65,11 @@ type Config struct {
 // Probe reports whether the binary is usable, without generating anything.
 //
 // ⚠️ Called at startup, not at the moment of a mint, and the reason is
-// discoverability. truss's image carries openssh-client today for ansible's
-// connection plugin, not because truss execs it; a future image change that drops
-// the package would otherwise surface as a failed rotation weeks later, in a
-// message about a subprocess. Refusing early, with the binary named, is the
-// difference between a lint finding and an outage.
+// discoverability. Nothing in the applier's image installs openssh-client
+// today, so `ssh-keygen` is not on PATH until whatever wires this package in
+// adds it back -- refusing early, with the binary named, is the difference
+// between a lint finding at startup and a failed rotation weeks later, in a
+// message about a subprocess.
 func Probe(ctx context.Context, bin string) error {
 	if bin == "" {
 		bin = "ssh-keygen"

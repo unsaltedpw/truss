@@ -260,7 +260,7 @@ func TestWhyUnitsSelectedMixedCommit(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runEnv(context.Background(), []string{"why", mixed, "--dir", dir}, env, nil, &stdout, &stderr)
 	out := stdout.String()
-	for _, want := range []string{"tofu:    projects/foo", "ansible: ansible/plays/bar", "render:  deliveries/prod/web"} {
+	for _, want := range []string{"tofu:    credentials", "tofu:    hosts/h", "tofu:    projects/foo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout = %q, want it to contain %q", out, want)
 		}
@@ -271,9 +271,9 @@ func TestWhyUnitsSelectedMixedCommit(t *testing.T) {
 }
 
 // TestWhyUnitsSelectedNamesTheSharedInputEffect is the case the task calls
-// out by name: a commit touching only inventory/ selects EVERY unit in the
-// tree, and that surprise must be stated explicitly rather than left for a
-// reader to notice from an unusually long list.
+// out by name: a commit touching only a shared input (modules/) selects
+// EVERY unit in the tree, and that surprise must be stated explicitly
+// rather than left for a reader to notice from an unusually long list.
 func TestWhyUnitsSelectedNamesTheSharedInputEffect(t *testing.T) {
 	dir, _, _, shared, _ := unitsFixture(t)
 	runGit(t, dir, "update-ref", "refs/remotes/origin/main", shared)
@@ -285,7 +285,7 @@ func TestWhyUnitsSelectedNamesTheSharedInputEffect(t *testing.T) {
 	if !strings.Contains(out, "shared input") {
 		t.Errorf("stdout = %q, want the shared-input warning", out)
 	}
-	for _, want := range []string{"tofu:    projects/foo", "ansible: ansible/plays/bar", "render:  baselines/prod", "render:  deliveries/prod/web"} {
+	for _, want := range []string{"tofu:    clusters/beta", "tofu:    hosts/h", "tofu:    projects/foo"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout = %q, want it to contain %q (every unit in the tree)", out, want)
 		}
@@ -303,7 +303,7 @@ func TestWhyUnitsSelectedNoopCommit(t *testing.T) {
 	if !strings.Contains(out, "units:\n  none -- this commit is a noop") {
 		t.Errorf("stdout = %q, want the noop line", out)
 	}
-	if !strings.Contains(out, "digests: n/a -- this commit selects no tofu root and no render unit") {
+	if !strings.Contains(out, "digests: n/a -- this commit selects no tofu root") {
 		t.Errorf("stdout = %q, want digests to report n/a for a commit with no units", out)
 	}
 }
@@ -325,7 +325,7 @@ func TestWhyApprovedDigestsPresentAndAbsent(t *testing.T) {
 	fl.put("head", []byte(mixed))
 
 	const prHeadSHA = "prheadshaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-	// projects/foo has a digest filed; deliveries/prod/web does not.
+	// projects/foo has a digest filed; hosts/h does not.
 	fl.put("digests/"+prHeadSHA+"/projects-foo.digest", []byte("deadbeefdigest"))
 
 	srv := newFakeForge(t, mixed, fakeForgeScenario{
@@ -346,8 +346,8 @@ func TestWhyApprovedDigestsPresentAndAbsent(t *testing.T) {
 	if !strings.Contains(out, "  projects/foo: present") {
 		t.Errorf("stdout = %q, want projects/foo reported present", out)
 	}
-	if !strings.Contains(out, "  render deliveries/prod/web: absent") {
-		t.Errorf("stdout = %q, want the render unit reported absent", out)
+	if !strings.Contains(out, "  hosts/h: absent") {
+		t.Errorf("stdout = %q, want hosts/h reported absent", out)
 	}
 }
 
@@ -514,11 +514,13 @@ func TestWhyNeverWritesToTheLedger(t *testing.T) {
 
 // TestWhyGitSectionsNeverWriteToGit drives §2 and §3 directly against a
 // fakeGit that already instruments every write-shaped gitDriver call
-// (Checkout, EnsureClone, Fetch, PushRef) for the apply pass's own tests,
-// and asserts none of them fired. `why` has no reason to ever call any of
-// them -- it never checks out a tree, never clones, never pushes -- and
-// this is the negative-testable proof of that half of the read-only
-// contract cmdWhy's own doc comment makes.
+// (Checkout, EnsureClone, Fetch) for the apply pass's own tests, and
+// asserts none of them fired. `why` has no reason to ever call any of them
+// -- it never checks out a tree and never clones -- and this is the
+// negative-testable proof of that half of the read-only contract cmdWhy's
+// own doc comment makes. gitDriver carries no push method at all, so "why
+// must never push" is enforced by the type system rather than a counter
+// here.
 func TestWhyGitSectionsNeverWriteToGit(t *testing.T) {
 	fl := newFakeLedger(t, "state-bucket")
 	fl.put("head", []byte("c0"))
@@ -545,9 +547,6 @@ func TestWhyGitSectionsNeverWriteToGit(t *testing.T) {
 	printQueuePosition(context.Background(), "c2", journal, g, &stdout, &stderr)
 	printUnitsSelected(context.Background(), "c2", g, &stdout)
 
-	if len(g.PushedRefs) != 0 {
-		t.Errorf("PushedRefs = %v, want none: why must never push", g.PushedRefs)
-	}
 	if g.cloned() {
 		t.Errorf("git was cloned, want no clone from a read-only command")
 	}

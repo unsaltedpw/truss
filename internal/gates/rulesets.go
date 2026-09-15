@@ -57,7 +57,7 @@ type Ruleset struct {
 	// Rules is the rule types this ruleset contributes to the ref in
 	// question -- "deletion", "non_fast_forward", "pull_request" and so on,
 	// in GitHub's own vocabulary rather than a normalised one. CheckRulesets
-	// ignores it; CheckDeliveryRef is what reads it.
+	// ignores it.
 	//
 	// ⚠️ IT IS THE RULES THAT APPLY TO ONE REF, NOT EVERY RULE THE RULESET
 	// DECLARES. The read that produces it asks which rules apply to a
@@ -65,6 +65,11 @@ type Ruleset struct {
 	// nothing here even though it exists. That is the question a gate about
 	// one ref actually wants, and asking the other one would let a rule
 	// protecting some other branch read as protecting this one.
+	//
+	// Unread by anything in this package today -- CheckRulesets ignores it --
+	// kept on the type because it is a fact the second read (rulesets/{id})
+	// actually returns and a future ref-specific gate would need without a
+	// third API call.
 	Rules []string
 }
 

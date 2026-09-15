@@ -18,12 +18,9 @@ type Declaration struct {
 // nowhere else in this tree that could set this list, and a second knob for
 // the same list is a second thing to keep in sync.
 //
-// docs/design.md claims "Helm is refused in every form". Until this gate,
-// only the kustomize half was real (internal/render refuses --enable-helm,
-// and kustomize itself refuses a helmCharts field when the flag is absent);
-// docs/work-items.md's "`helm_release` has no enforcer" recorded that the
-// tofu side -- a helm_release resource reaching a chart repository at apply
-// time -- had nothing looking for it at all.
+// docs/work-items.md's "`helm_release` had no enforcer on the tofu side"
+// recorded that a helm_release resource reaching a chart repository at
+// apply time had nothing looking for it. This gate is what closed it.
 var forbiddenTypes = []string{
 	"helm_release",
 }
@@ -41,9 +38,9 @@ var forbiddenTypes = []string{
 // resource untouched THIS pass still has its provisioner ready to fire the
 // next time anything touches it.
 //
-// A forbidden resource type is refused for the same underlying reason
-// design.md gives for refusing Helm from the kustomize side: a chart is
-// content fetched at apply time, not a diff the reviewer saw.
+// A forbidden resource type is refused for the same underlying reason a
+// provisioner is: a chart is content fetched at apply time, not a diff the
+// reviewer saw.
 //
 // Every offender is reported, not just the first -- an operator fixing a
 // plan one refusal at a time, re-running the whole apply between each, is

@@ -9,15 +9,10 @@ import (
 
 // subcommands is the documented set from docs/port-plan.md §4.9, plus
 // status, why and skip -- the local operator CLI docs/work-items.md:86-133
-// asks for, which post-dates that table (§4.9 has been updated to say so) --
-// plus render-digest and inventory, the CI-side render gate and the
-// inventory consistency check, neither of which existed when either table
-// was written. `inventory` collapses `inventory validate` to one top-level
-// verb, the same way `ledger` and `gate` already collapse their own verbs.
-// `units` post-dates all of those: it prints the units a commit touches, so
-// CI and the applier derive the set from one implementation instead of a
-// consumer's CI reimplementing the rule (docs/work-items.md, "The two sides
-// of the render digest do not share a derivation").
+// asks for, which post-dates that table (§4.9 has been updated to say so).
+// `units` post-dates that too: it prints the units a commit touches, so CI
+// and the applier derive the set from one implementation instead of a
+// consumer's CI reimplementing the rule.
 // TestSubcommandsAreExactlyTheDocumentedSet reads this slice directly rather
 // than re-deriving it, so adding a subcommand here is the one place that
 // needs to change for that test to see it.
@@ -33,8 +28,6 @@ var subcommands = []string{
 	"status",
 	"why",
 	"skip",
-	"render-digest",
-	"inventory",
 	"units",
 }
 
@@ -71,10 +64,10 @@ subcommands:
   why <sha> [--dir <path>]
                          explain everything the system knows about one
                          commit: the ledger record if any, its queue
-                         position relative to HEAD, the tofu/ansible/render
-                         units it selects, and whether CI filed an approved
-                         plan digest for each -- reads the ledger, a local
-                         git checkout (--dir, default ".") and the forge for
+                         position relative to HEAD, the tofu units it
+                         selects, and whether CI filed an approved plan
+                         digest for each -- reads the ledger, a local git
+                         checkout (--dir, default ".") and the forge for
                          the PR head sha; never writes to the ledger, never
                          takes the state lock, never applies anything.
                          Exit 2 if the queue has not reached this commit
@@ -83,15 +76,10 @@ subcommands:
                          advance HEAD past a commit that cannot apply;
                          refuses without a failed record, a stated reason
                          and TRUSS_SKIP_I_UNDERSTAND=<sha>
-  render-digest <dir>    render a Kustomize directory twice and print its
-                         digest (CI witness side of the delivery gate)
-  inventory validate [dir] [--json]
-                         check the inventory tree for dangling references
-                         and orphaned delivery units
   units <sha> [--dir <path>] [--kind <kind>]
                          print the units a commit touches, one per line as
                          "<kind>\t<path>" in execution order (credentials,
-                         tofu, ansible, render); --kind filters to one kind
+                         tofu); --kind filters to one kind
 `
 
 // run is the binary's only entry point besides main, and main's only job
@@ -133,10 +121,6 @@ func runEnv(ctx context.Context, args []string, getenv func(string) string, stdi
 		return cmdWhy(ctx, rest, getenv, stdout, stderr)
 	case "skip":
 		return cmdSkip(ctx, rest, getenv, stdout, stderr)
-	case "render-digest":
-		return cmdRenderDigest(ctx, rest, getenv, stdout, stderr)
-	case "inventory":
-		return cmdInventory(rest, stdout, stderr)
 	case "units":
 		return cmdUnits(ctx, rest, stdout, stderr)
 	default:

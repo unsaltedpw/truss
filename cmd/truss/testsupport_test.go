@@ -9,7 +9,6 @@ import (
 	"encoding/pem"
 	"encoding/xml"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/beeradb/truss/internal/gates"
@@ -128,28 +126,6 @@ func (f *fakeForge) Rulesets(ctx context.Context, branch string) (gates.Rulesets
 		return rs, f.RulesetsErr
 	}
 	return f.RulesetsResult, f.RulesetsErr
-}
-
-// testApplierAppID is the GitHub App id these fixtures give the applier, on
-// both sides of the check: config.Config.DeliveryBypassActorID and the
-// delivery ref's bypass list. They have to be the same number, because the
-// gate's question is whether the ref names the App the applier authenticates
-// as, and a fixture that drifted would be answering a different question.
-const testApplierAppID = 555
-
-// protectedDeliveryRulesets is a ruleset shaped the way CheckDeliveryRef
-// demands: active, its bypass list readable, all three rules present so the
-// ref is append-only AND restricted to the applier's App, and that App the only
-// actor listed.
-func protectedDeliveryRulesets() gates.Rulesets {
-	return gates.Rulesets{Applicable: []gates.Ruleset{{
-		ID: 42, Name: "delivery ref", Enforcement: "active",
-		Rules:            []string{"non_fast_forward", "deletion", "update"},
-		BypassActorsRead: true,
-		BypassActors: []gates.BypassActor{
-			{ActorID: testApplierAppID, ActorType: "Integration", BypassMode: "always"},
-		},
-	}}}
 }
 
 func (f *fakeForge) InstallationToken(ctx context.Context) (string, time.Time, error) {
@@ -786,47 +762,14 @@ type fakeGit struct {
 	ChangedByCommit   map[string][]string
 	TreeRootsByCommit map[string][]string
 
-	// TreeRenderUnitsByCommit is the render-unit listing, separate from
-	// TreeRootsByCommit because the driver keeps the two listings apart --
-	// TreeRoots reproduces the bash's exact ls-tree and must not widen.
-	TreeRenderUnitsByCommit map[string][]string
-
 	// TreeTofuUnitsByCommit is the credentials/tofu-unit listing runCommitLoop
-	// now feeds repo.TouchedUnits from, in place of TreeRootsByCommit --
-	// separate for the same reason TreeRenderUnitsByCommit is: TreeRoots
-	// itself must not widen. Most fixtures leave this nil (an empty tree),
-	// which is correct whenever the scenario names its unit directly in
-	// ChangedByCommit rather than relying on the shared-input branch.
+	// feeds repo.TouchedUnits from, in place of TreeRootsByCommit -- separate
+	// because TreeRoots reproduces the bash's exact ls-tree and must not
+	// widen. Most fixtures leave this nil (an empty tree), which is correct
+	// whenever the scenario names its unit directly in ChangedByCommit
+	// rather than relying on the shared-input branch.
 	TreeTofuUnitsByCommit map[string][]string
 
-	// TreeAnsibleUnitsByCommit is the play listing, the third of the three
-	// tree listings the driver keeps apart. Nil in almost every fixture,
-	// which is what a tree with no ansible/plays/ directory looks like --
-	// and that is the state every scenario predating the ansible kind is in,
-	// so leaving it nil must keep those scenarios byte-identical.
-	TreeAnsibleUnitsByCommit map[string][]string
-
-	// TreeFSBySha is the tree a commit exposes to inventory.Load. An absent
-	// entry is an EMPTY filesystem rather than an error, which is what a
-	// deployment that has not adopted the inventory looks like -- the pass
-	// must skip, not refuse, and a fixture that errored instead would hide
-	// that distinction.
-	TreeFSBySha map[string]fs.FS
-	TreeFSErr   error
-
-	// ParentBySha answers Parent: a key present means sha has that parent, a
-	// key absent means "no parent" -- the same "absence is the ordinary
-	// default" shape as TreeFSBySha, and it is what every existing test gets
-	// for free by never setting it: no test here claims a commit has a
-	// parent unless it is exercising CheckMoves.
-	ParentBySha map[string]string
-
-	// PushedRefs records every PushRef as "<ref>=<sha>". Whether the
-	// delivery ref moved AT ALL is the property the ref gate exists to
-	// control, so a test asserting a refusal has to be able to see it --
-	// the same reason fakeTofu records applies.
-	PushedRefs  []string
-	PushRefErr  error
 	HasDirFn    func(root string) bool
 	CheckoutErr error
 	CommitsErr  error
@@ -906,39 +849,8 @@ func (g *fakeGit) TreeRoots(ctx context.Context, sha string) ([]string, error) {
 	return g.TreeRootsByCommit[sha], nil
 }
 
-func (g *fakeGit) TreeRenderUnits(ctx context.Context, sha string) ([]string, error) {
-	return g.TreeRenderUnitsByCommit[sha], nil
-}
-
 func (g *fakeGit) TreeTofuUnits(ctx context.Context, sha string) ([]string, error) {
 	return g.TreeTofuUnitsByCommit[sha], nil
-}
-
-func (g *fakeGit) TreeAnsibleUnits(ctx context.Context, sha string) ([]string, error) {
-	return g.TreeAnsibleUnitsByCommit[sha], nil
-}
-
-func (g *fakeGit) TreeFS(ctx context.Context, sha string) (fs.FS, error) {
-	if g.TreeFSErr != nil {
-		return nil, g.TreeFSErr
-	}
-	if f, ok := g.TreeFSBySha[sha]; ok {
-		return f, nil
-	}
-	return fstest.MapFS{}, nil
-}
-
-func (g *fakeGit) Parent(ctx context.Context, sha string) (string, bool) {
-	p, ok := g.ParentBySha[sha]
-	return p, ok
-}
-
-func (g *fakeGit) PushRef(ctx context.Context, sha, ref string) error {
-	if g.PushRefErr != nil {
-		return g.PushRefErr
-	}
-	g.PushedRefs = append(g.PushedRefs, ref+"="+sha)
-	return nil
 }
 
 func (g *fakeGit) Checkout(ctx context.Context, ref string) error {

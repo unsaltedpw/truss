@@ -21,7 +21,6 @@ import (
 	"github.com/beeradb/truss/internal/ledger"
 	"github.com/beeradb/truss/internal/notify"
 	"github.com/beeradb/truss/internal/secrets"
-	"github.com/beeradb/truss/internal/tailnet"
 )
 
 // Item and field names, one constant per credential this binary reads.
@@ -223,40 +222,4 @@ func loadGCPCredentials(dir secrets.Dir) (string, error) {
 // the credentials root.
 func loadTofuPassphrase(dir secrets.Dir) (string, error) {
 	return dir.Field(itemTofuEncryption, fieldTofuPassphrase)
-}
-
-// loadTailnetClient builds the device lister the ansible target gate reads,
-// from the same two fields buildBaseEnv exports to the tailscale provider.
-// No new credential: a deployment that manages its tailnet policy as code
-// already mounts this item, and one that does not has no hosts to configure.
-//
-// It returns (nil, nil) when the item is absent, which is the ordinary case
-// and not a failure -- see the caller's own comment on why the refusal
-// belongs at the play rather than at startup.
-//
-// ⚠️ THE TAILNET NAME IS REQUIRED WHEN THE KEY IS PRESENT, WHERE THE
-// PROVIDER TREATS IT AS OPTIONAL. buildBaseEnv can leave TAILSCALE_TAILNET
-// unset and let the provider fall back to "the tailnet that owns this
-// credential"; this client must not, because the fallback answers a
-// different question the first time a credential from another tailnet is
-// used -- and the answer here decides which machines the applier believes
-// exist. A wrong tailnet returns a device list with none of our hosts in it,
-// which reads as "every declared host is unreachable" rather than as a
-// misconfiguration.
-func loadTailnetClient(dir secrets.Dir, baseURL string) (*tailnet.Client, error) {
-	key, ok, err := dir.FieldIfPresent(itemTailscale, fieldTailscaleKey)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, nil
-	}
-	net, ok, err := dir.FieldIfPresent(itemTailscale, fieldTailscaleNet)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("the %s item has a %s but no %s: the tailnet must be stated, never inferred from the credential, because it decides which machines the applier believes exist", itemTailscale, fieldTailscaleKey, fieldTailscaleNet)
-	}
-	return tailnet.New(tailnet.Config{APIKey: key, Tailnet: net, BaseURL: baseURL})
 }

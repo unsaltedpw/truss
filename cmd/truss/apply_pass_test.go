@@ -110,17 +110,7 @@ func buildTestDeps(t *testing.T, forgeFake *fakeForge, git gitDriver, newTofu to
 		},
 		Git:     git,
 		NewTofu: newTofu,
-		// A fixture that reaches the render path without saying what the
-		// renderer should produce is a fixture with a hole in it, so the
-		// default refuses by name rather than returning empty bytes. A test
-		// that exercises delivery sets deps.NewRender itself.
-		NewRender: func(env []string) renderRunner { return unconfiguredRender{} },
-		// Same refusal-by-default as NewRender above, and for the same
-		// reason: a fixture that reaches a play without saying what
-		// ansible-playbook should report has a hole in it, and an empty
-		// Result would read as "the play ran and changed nothing".
-		NewAnsible: func(env []string) ansibleRunner { return unconfiguredAnsible{} },
-		Now:        func() time.Time { return time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC) },
+		Now:     func() time.Time { return time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC) },
 		VaultConfig: secrets.KVConfig{
 			Addr: vaultSrv.URL, Mount: "platform", Role: "applier", JWTPath: testJWTFile(t),
 		},
@@ -157,9 +147,6 @@ func testConfig() config.Config {
 		Workdir:             "",
 		RequiredCheck:       "plan",
 		ExpiryWarnDays:      30,
-		// Matches the App the delivery ruleset fixture names as its only
-		// bypass actor; see testApplierAppID.
-		DeliveryBypassActorID: testApplierAppID,
 	}
 }
 
